@@ -12,23 +12,26 @@ TradingAgents — мультиагентная платформа дэйтрей
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional, List
 
 import uvicorn
 
-from config import settings
+from config import settings, ENV_PATH, ENV_EXAMPLE_PATH
 from data.market_data import MarketData
 from strategies.registry import build_strategy, STRATEGY_SCHEMAS
 from backtest.engine import run_backtest
 from agents.orchestrator import get_orchestrator
+from agents import roles
 from live.engine import get_live_engine
+from llm.client import get_client
 
 
 # ---------------------------------------------------------------------- #
@@ -185,6 +188,65 @@ async def scan(req: Optional[ScanRequest] = None,
 @app.get("/api/live/state")
 async def live_state():
     return get_live_engine().state()
+
+
+# ---------------------------------------------------------------------- #
+# Конфигурация (ключи/модели/правила) — редактирование из браузера
+# ---------------------------------------------------------------------- #
+@app.get("/api/config")
+async def get_config():
+    return {
+        **settings.public_config(),
+        "env_path": ENV_PATH,
+        "env_exists": os.path.exists(ENV_PATH),
+    }
+
+
+class ConfigUpdate(BaseModel):
+    updates: dict
+
+
+@app.post("/api/config")
+async def update_config(body: ConfigUpdate):
+    try:
+        applied = settings.apply_update(body.updates)
+        return {"ok": True, "applied": list(applied.keys()), "config": settings.public_config()}
+    except Exception as e:
+        raise HTTPException(400, f"Ошибка сохранения: {e}")
+
+
+@app.post("/api/config/test")
+async def test_models(role: Optional[str] = Query(default=None)):
+    """Проверка доступности моделей. role='all' или конкретная роль."""
+    client = get_client()
+    if role and role != "all":
+        if role not in settings.ROLE_KEYS:
+            raise HTTPException(404, f"Неизвестная роль: {role}")
+        return {"results": {role: await client.test(role)}}
+    results = {}
+    for r in settings.ROLE_KEYS:
+        results[r] = await client.test(r)
+    return {"results": results, "demo_mode": settings.is_demo()}
+
+
+# ---------------------------------------------------------------------- #
+# Стриминг-анализ (SSE) — «ветки размышлений» агентов в реальном времени
+# ---------------------------------------------------------------------- #
+@app.get("/api/analyze/stream")
+async def analyze_stream(symbol: str, strategy: str = "momentum_breakout",
+                         timeframe: str = None):
+    orch = get_orchestrator()
+
+    async def gen():
+        try:
+            async for event, data in orch.analyze_stream(symbol, strategy, timeframe):
+                yield f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            yield f"event: error\ndata: {json.dumps({'message': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
 
 
 # ---------------------------------------------------------------------- #

@@ -10,9 +10,11 @@
 
 <header class="topbar">
     <div class="brand">
-        <span class="logo">◈</span>
-        <span class="brand-name">TradingAgents</span>
-        <span class="brand-sub">multi-agent daytrading</span>
+        <div class="logo">◈</div>
+        <div>
+            <span class="brand-name">TradingAgents</span>
+            <span class="brand-sub">multi-agent daytrading</span>
+        </div>
     </div>
     <nav class="nav" id="nav">
         <button class="nav-btn active" data-tab="dashboard">Дашборд</button>
@@ -22,7 +24,7 @@
         <button class="nav-btn" data-tab="settings">Настройки</button>
     </nav>
     <div class="status-group">
-        <span id="conn-status" class="conn-status offline">● офлайн</span>
+        <span id="conn-status" class="conn-status offline"><span class="dot"></span>офлайн</span>
         <span id="demo-badge" class="badge">DEMO</span>
     </div>
 </header>
@@ -33,7 +35,7 @@
         <aside class="card coins-card">
             <div class="card-head">
                 <h2>🔥 Горячие монеты</h2>
-                <button id="refresh-tickers" class="btn-ghost btn-sm">⟳</button>
+                <button id="refresh-tickers" class="btn btn-ghost btn-sm">⟳</button>
             </div>
             <div class="card-body" id="coins-list"><div class="empty">Загрузка…</div></div>
         </aside>
@@ -59,12 +61,15 @@
         </aside>
     </div>
 
-    <!-- Консенсус-панель -->
+    <!-- Консенсус-панель с деревом размышлений -->
     <div class="consensus-row">
         <div class="card consensus-card">
-            <div class="card-head"><h2>Консенсус агентов</h2><span id="consensus-symbol" class="muted"></span></div>
+            <div class="card-head">
+                <h2>🧠 Дерево размышлений агентов</h2>
+                <span id="consensus-symbol" class="muted"></span>
+            </div>
             <div class="card-body" id="consensus-body">
-                <div class="empty">Выберите монету и нажмите «Анализ агентов»</div>
+                <div class="empty">Выберите монету и нажмите «Анализ агентов» —<br>здесь появятся ветки рассуждений каждой модели</div>
             </div>
         </div>
         <div class="card live-mini">
@@ -172,7 +177,12 @@
 <!-- ============ SETTINGS ============ -->
 <section class="panel" id="panel-settings">
     <div class="card">
-        <div class="card-head"><h2>Конфигурация моделей и правил</h2></div>
+        <div class="card-head">
+            <h2>⚙️ Ключи и модели</h2>
+            <div class="spacer"></div>
+            <button id="test-models-btn" class="btn btn-ghost btn-sm">🔌 Проверить все модели</button>
+            <button id="save-settings-btn" class="btn btn-primary btn-sm">💾 Сохранить</button>
+        </div>
         <div class="card-body" id="settings-body"><div class="empty">Загрузка…</div></div>
     </div>
 </section>

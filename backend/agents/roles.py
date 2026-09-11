@@ -27,6 +27,7 @@ SYSTEM_TEMPLATE = """Ты — {name} в профессиональной мул�
 
 ОТВЕЧАЙ СТРОГО JSON-объектом без пояснений, в таком формате:
 {{
+  "thinking": ["шаг 1 рассуждения", "шаг 2 рассуждения", "шаг 3 рассуждения"],
   "side": "LONG" | "SHORT" | "NEUTRAL",
   "confidence": число от 0.0 до 1.0,
   "reason": "краткое обоснование на русском (1-3 предложения)",
@@ -35,6 +36,7 @@ SYSTEM_TEMPLATE = """Ты — {name} в профессиональной мул�
 }}
 
 Правила:
+- thinking — 2-4 коротких пункта твоего хода размышлений (что ты видишь в данных и почему).
 - NEUTRAL ставь, если нет уверенного перевеса в какую-либо сторону.
 - Учитывай, что платформа уже рассчитала сигнал по индикаторной стратегии «{strategy}»: {strategy_signal}.
 - Ты можешь согласиться, усилить или оспорить этот сигнал. Если оспариваешь — объясни в reason.
@@ -108,7 +110,11 @@ async def get_agent_verdict(role_key: str, snapshot: dict) -> dict:
     verdict.setdefault("confidence", 0.0)
     verdict.setdefault("reason", "")
     verdict.setdefault("risks", [])
+    verdict.setdefault("thinking", [])
     verdict.setdefault("key_levels", {"support": None, "resistance": None})
+    if not isinstance(verdict["thinking"], list):
+        verdict["thinking"] = []
+    verdict["thinking"] = [str(t) for t in verdict["thinking"] if str(t).strip()]
     verdict["side"] = str(verdict["side"]).upper()
     if verdict["side"] not in ("LONG", "SHORT", "NEUTRAL"):
         verdict["side"] = "NEUTRAL"

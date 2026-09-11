@@ -8,6 +8,8 @@ const state = {
     rules: {},
     live: {},
     tvWidget: null,
+    config: null,
+    es: null, // текущий EventSource (стриминг-анализ)
 };
 
 /* ---------- Навигация по вкладкам ---------- */
@@ -20,31 +22,36 @@ function initNav() {
             document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
             if (btn.dataset.tab === 'backtest') redrawEquity();
             if (btn.dataset.tab === 'dashboard') resizeChart();
+            if (btn.dataset.tab === 'settings') loadSettings();
         });
     });
 }
 
-/* ---------- Инициализация (загрузка конфига) ---------- */
+/* ---------- Инициализация ---------- */
 async function init() {
     initNav();
     try {
         const health = await API.get('/api/health');
         state.rules = health.rules || {};
-        document.getElementById('demo-badge').textContent = health.demo_mode ? 'DEMO' : 'LIVE';
-        document.getElementById('demo-badge').style.display = health.demo_mode ? '' : 'none';
+        setDemoBadge(health.demo_mode);
     } catch (e) { log('system', 'Ошибка подключения к backend: ' + e.message); }
 
-    await Promise.all([loadSymbols(), loadStrategies(), loadSettings()]);
+    await Promise.all([loadSymbols(), loadStrategies()]);
     renderRules();
     renderFooterAgents();
     initChart();
     initTickers();
     initLive();
 
-    // WebSocket
     connectWS(onWsEvent, (s) => { state.live = s || {}; renderLive(); });
     setInterval(refreshTickers, 30000);
     setInterval(refreshLiveState, 10000);
+}
+
+function setDemoBadge(demo) {
+    const b = document.getElementById('demo-badge');
+    if (demo) { b.textContent = 'DEMO'; b.className = 'badge'; }
+    else { b.textContent = 'LIVE · AI'; b.className = 'badge live'; }
 }
 
 /* ---------- Символы ---------- */
@@ -56,7 +63,6 @@ async function loadSymbols() {
         sel.innerHTML = state.symbols.map(s => `<option value="${s}">${s}</option>`).join('');
         sel.value = state.currentSymbol;
         sel.addEventListener('change', () => { state.currentSymbol = sel.value; switchSymbol(); });
-        // заполнить select бэктеста
         document.getElementById('bt-symbol').innerHTML = state.symbols.map(s => `<option value="${s}">${s}</option>`).join('');
     } catch (e) { log('system', 'Ошибка загрузки символов: ' + e.message); }
 }
@@ -113,47 +119,160 @@ function fillStrategyForm() {
     document.getElementById('st-params').value = JSON.stringify(def.params || {}, null, 2);
 }
 
-/* ---------- Настройки ---------- */
+/* =========================================================================
+   НАСТРОЙКИ (ключи, модели, правила) — редактирование из браузера
+   ========================================================================= */
+const ROLE_META = {
+    strategist: { icon: '🧠', name: 'Ведущий стратег' },
+    momentum: { icon: '⚡', name: 'Аналитик моментума' },
+    contrarian: { icon: '🦅', name: 'Контрариан / сентимент' },
+    macro: { icon: '💎', name: 'Макро-контекст' },
+    risk: { icon: '🛡️', name: 'Риск-менеджер' },
+};
+
 async function loadSettings() {
-    const box = document.getElementById('settings-body');
-    const health = await API.get('/api/health').catch(() => ({}));
-    const strategies = await API.get('/api/strategies').catch(() => ({ strategies: [] }));
-    const rules = health.rules || {};
-    box.innerHTML = `
-        <div class="rules-grid">
-            ${Object.entries(rules).map(([k, v]) => `
-                <div class="metric"><div class="m-label">${k}</div><div class="m-value" style="font-size:16px">${v}</div></div>
-            `).join('')}
-        </div>
-        <h3 style="margin:16px 0 8px">Подключённые модели (5 ролей)</h3>
-        <div class="agents-row">
-            ${[
-                { icon: '🧠', name: 'Ведущий стратег', model: 'STRATEGIST_MODEL' },
-                { icon: '⚡', name: 'Аналитик моментума', model: 'MOMENTUM_MODEL' },
-                { icon: '🦅', name: 'Контрариан', model: 'CONTRARIAN_MODEL' },
-                { icon: '💎', name: 'Макро', model: 'MACRO_MODEL' },
-                { icon: '🛡️', name: 'Риск-менеджер', model: 'RISK_MODEL' },
-            ].map(a => `
-                <div class="agent-card">
-                    <div class="a-head"><span>${a.icon}</span><span class="a-name">${a.name}</span></div>
-                    <div class="a-model">env: ${a.model}</div>
-                </div>
-            `).join('')}
-        </div>
-        <p class="muted" style="margin-top:16px">
-            Модели настраиваются в файле <b>.env</b> (см. .env.example). Без ключей система
-            работает в DEMO-режиме на детерминированных ответах. Провайдеры: OpenRouter,
-            OpenAI, Anthropic, xAI, Google Gemini (OpenAI-совместимый API).
-        </p>
-    `;
+    try {
+        const cfg = await API.get('/api/config');
+        state.config = cfg;
+        renderSettings(cfg);
+    } catch (e) {
+        document.getElementById('settings-body').innerHTML =
+            `<div class="empty" style="color:var(--red)">Ошибка загрузки настроек: ${e.message}</div>`;
+    }
 }
 
-/* ---------- Dashboard: тикеры ---------- */
+function renderSettings(cfg) {
+    const box = document.getElementById('settings-body');
+    const roles = cfg.roles.map(r => {
+        const m = ROLE_META[r.key] || { icon: '🤖', name: r.key };
+        return `
+        <div class="role-row" data-role="${r.key}">
+            <div>
+                <div class="r-name">${m.icon} ${m.name}</div>
+                <div class="r-model">${r.model}</div>
+            </div>
+            <input type="text" class="role-model" value="${escapeHtml(r.model)}" placeholder="модель (напр. gpt-6-astra)">
+            <input type="password" class="role-key" value="${escapeHtml(r.api_key)}" placeholder="ключ (пусто = глобальный)">
+            <span class="role-status wait">—</span>
+        </div>`;
+    }).join('');
+
+    box.innerHTML = `
+        <div class="settings-section">
+            <h3>🔑 AI-подключение (endpoint)</h3>
+            <div class="kv-row"><label>Base URL</label><input type="text" id="set-base-url" value="${escapeHtml(cfg.base_url)}"></div>
+            <div class="kv-row"><label>Глобальный API-ключ</label><input type="password" id="set-global-key" value="${escapeHtml(cfg.global_api_key)}" placeholder="один ключ для всех моделей"></div>
+            <p class="muted" style="margin-top:4px">Если ввести глобальный ключ — он подставится во все 5 моделей. Можно задать отдельный ключ для каждой роли ниже.</p>
+        </div>
+        <div class="settings-section">
+            <h3>🤖 Модели по ролям</h3>
+            ${roles}
+        </div>
+        <div class="settings-section">
+            <h3>📈 Bybit (публичные данные)</h3>
+            <div class="kv-row"><label>Base URL</label><input type="text" id="set-bybit-url" value="${escapeHtml(cfg.bybit.base_url)}"></div>
+            <div class="kv-row"><label>API Key</label><input type="password" id="set-bybit-key" value="${escapeHtml(cfg.bybit.api_key)}" placeholder="необязательно (нужен для реальных ордеров)"></div>
+            <div class="kv-row"><label>API Secret</label><input type="password" id="set-bybit-secret" value="" placeholder="необязательно"></div>
+        </div>
+        <div class="settings-section">
+            <h3>🛡️ Правила торговли</h3>
+            <div class="kv-row"><label>Макс. сделок в день</label><input type="number" id="set-max-trades" value="${cfg.rules.max_trades_per_day}" min="1"></div>
+            <div class="kv-row"><label>Мин. Take-Profit, %</label><input type="number" id="set-min-tp" value="${cfg.rules.min_tp_pct}" step="0.1" min="0.1"></div>
+            <div class="kv-row"><label>Макс. удержание, часов</label><input type="number" id="set-max-hold" value="${cfg.rules.max_hold_hours}" step="0.5" min="0.1"></div>
+            <div class="kv-row"><label>Дефолт Stop-Loss, %</label><input type="number" id="set-sl" value="${cfg.rules.default_sl_pct}" step="0.1" min="0.1"></div>
+            <div class="kv-row"><label>Порог уверенности (0-1)</label><input type="number" id="set-min-conf" value="${cfg.rules.min_confidence}" step="0.05" min="0" max="1"></div>
+        </div>
+    `;
+
+    document.getElementById('test-models-btn').addEventListener('click', testModels);
+    document.getElementById('save-settings-btn').addEventListener('click', saveSettings);
+}
+
+async function saveSettings() {
+    const btn = document.getElementById('save-settings-btn');
+    btn.disabled = true; btn.textContent = '💾 Сохранение…';
+    const updates = {};
+
+    const baseUrl = val('set-base-url');
+    const globalKey = val('set-global-key');
+    const bybitKey = val('set-bybit-key');
+    const bybitSecret = val('set-bybit-secret');
+    const bybitUrl = val('set-bybit-url');
+
+    if (baseUrl) updates.ai_base_url = baseUrl;
+    if (globalKey && !globalKey.includes('…')) updates.ai_api_key = globalKey;
+    if (bybitUrl) updates.bybit_base_url = bybitUrl;
+    if (bybitKey && !bybitKey.includes('…')) updates.bybit_api_key = bybitKey;
+    if (bybitSecret) updates.bybit_api_secret = bybitSecret;
+
+    document.querySelectorAll('.role-row').forEach(row => {
+        const role = row.dataset.role;
+        const model = row.querySelector('.role-model').value.trim();
+        const key = row.querySelector('.role-key').value.trim();
+        if (model) updates[role + '_model'] = model;
+        if (key && !key.includes('…')) updates[role + '_api_key'] = key;
+    });
+
+    updates.max_trades_per_day = parseInt(val('set-max-trades')) || 30;
+    updates.min_tp_pct = parseFloat(val('set-min-tp')) || 2;
+    updates.max_hold_hours = parseFloat(val('set-max-hold')) || 4;
+    updates.default_sl_pct = parseFloat(val('set-sl')) || 1;
+    updates.min_confidence = parseFloat(val('set-min-conf')) || 0.55;
+
+    try {
+        const res = await API.post('/api/config', { updates });
+        state.config = res.config;
+        setDemoBadge(res.config.demo_mode);
+        log('system', `Настройки сохранены (${res.applied.length} параметров). Файл: .env`);
+        toast('✅ Настройки сохранены и записаны в .env');
+        await loadSettings();
+    } catch (e) {
+        toast('❌ Ошибка: ' + e.message);
+    } finally {
+        btn.disabled = false; btn.textContent = '💾 Сохранить';
+    }
+}
+
+async function testModels() {
+    const btn = document.getElementById('test-models-btn');
+    btn.disabled = true; btn.textContent = '⏳ Проверка…';
+    document.querySelectorAll('.role-status').forEach(s => { s.textContent = '…'; s.className = 'role-status wait'; });
+    try {
+        // сначала сохранить текущие значения, чтобы проверить именно их
+        const res = await API.post('/api/config/test?role=all');
+        const results = res.results;
+        document.querySelectorAll('.role-row').forEach(row => {
+            const role = row.dataset.role;
+            const st = row.querySelector('.role-status');
+            const r = results[role];
+            if (r && r.ok) {
+                st.textContent = `✓ ${r.latency_ms}мс`;
+                st.className = 'role-status ok';
+            } else {
+                st.textContent = '✗ нет ключа / ошибка';
+                st.className = 'role-status err';
+                if (r && r.error) st.title = r.error;
+            }
+        });
+        if (res.demo_mode) toast('Все ключи пусты — сейчас работает DEMO-режим');
+        else toast('Проверка завершена. Зелёный ✓ = модель доступна');
+    } catch (e) {
+        toast('Ошибка: ' + e.message);
+    } finally {
+        btn.disabled = false; btn.textContent = '🔌 Проверить все модели';
+    }
+}
+
+function val(id) { const el = document.getElementById(id); return el ? el.value.trim() : ''; }
+
+/* =========================================================================
+   DASHBOARD: тикеры
+   ========================================================================= */
 async function refreshTickers() {
     try {
         const data = await API.get('/api/tickers');
         renderTickers(data.tickers || []);
-    } catch (e) { /* тихо */ }
+    } catch (e) {}
 }
 
 function renderTickers(tickers) {
@@ -181,7 +300,9 @@ function renderTickers(tickers) {
     });
 }
 
-/* ---------- Chart (TradingView + fallback) ---------- */
+/* =========================================================================
+   CHART
+   ========================================================================= */
 function initChart() {
     const tfGroup = document.getElementById('tf-group');
     ['1m', '3m', '5m', '15m', '30m', '1h', '4h'].forEach(tf => {
@@ -208,7 +329,7 @@ function initChart() {
                 theme: 'dark',
                 style: '1',
                 locale: 'ru',
-                toolbar_bg: '#121826',
+                toolbar_bg: '#131928',
                 enable_publishing: false,
                 hide_side_toolbar: false,
                 allow_symbol_change: false,
@@ -217,7 +338,6 @@ function initChart() {
     } else {
         enableFallbackChart();
     }
-    // Если через 4 сек TradingView не отрисовался — включаем fallback
     setTimeout(() => {
         const tvEl = document.getElementById('tradingview-chart');
         if (!tvEl || !tvEl.querySelector('iframe')) enableFallbackChart();
@@ -236,14 +356,12 @@ async function loadFallbackCandles() {
     try {
         const data = await API.get(`/api/klines/${state.currentSymbol}?interval=${state.currentTF}&limit=120`);
         drawCandles(document.getElementById('candles-canvas'), data.candles || []);
-    } catch (e) { /* тихо */ }
+    } catch (e) {}
 }
 
 function switchSymbol() {
     if (state.tvWidget && window.TradingView) {
-        try {
-            state.tvWidget.setSymbol(`BYBIT:${state.currentSymbol}`, state.currentTF);
-        } catch (e) {}
+        try { state.tvWidget.setSymbol(`BYBIT:${state.currentSymbol}`, state.currentTF); } catch (e) {}
     }
     if (document.getElementById('chart-fallback').style.display !== 'none') loadFallbackCandles();
 }
@@ -252,74 +370,142 @@ function resizeChart() {
     if (document.getElementById('chart-fallback').style.display !== 'none') loadFallbackCandles();
 }
 
-/* ---------- Мультиагентный анализ ---------- */
+/* =========================================================================
+   МУЛЬТИАГЕНТНЫЙ АНАЛИЗ (стриминг + дерево размышлений)
+   ========================================================================= */
+const AGENT_ORDER = ['strategist', 'momentum', 'contrarian', 'macro', 'risk'];
+
 async function runAnalysis() {
     const btn = document.getElementById('analyze-btn');
     btn.disabled = true;
-    btn.textContent = '⏳ Анализ…';
+    btn.innerHTML = '<span class="spinner"></span> Анализ…';
     setAgentState('all', 'thinking');
-    try {
-        const data = await API.post('/api/analyze', {
-            symbol: state.currentSymbol,
-            strategy: document.getElementById('bt-strategy').value,
-            timeframe: state.currentTF,
-        });
-        renderConsensus(data);
-        log('system', `Анализ ${state.currentSymbol} завершён (консенсус: ${data.consensus.side})`);
-    } catch (e) {
-        log('error', 'Ошибка анализа: ' + e.message);
-    } finally {
-        btn.disabled = false;
-        btn.textContent = '🤖 Анализ агентов';
-        setAgentState('all', 'active');
+
+    // закрыть предыдущий стрим
+    if (state.es) { state.es.close(); state.es = null; }
+
+    const symbol = state.currentSymbol;
+    const strategy = document.getElementById('bt-strategy').value;
+    const timeframe = state.currentTF;
+
+    // подготавливаем дерево
+    const body = document.getElementById('consensus-body');
+    document.getElementById('consensus-symbol').textContent = `${symbol} · ${timeframe}`;
+    body.innerHTML = `<div class="tree-wrap"><div class="tree-root" id="tree-root"></div></div>`;
+
+    // используем SSE (fallback на обычный POST, если EventSource недоступен)
+    const url = `/api/analyze/stream?symbol=${symbol}&strategy=${strategy}&timeframe=${timeframe}`;
+    if (typeof EventSource !== 'undefined') {
+        state.es = new EventSource(url);
+        state.es.addEventListener('snapshot', e => onSnapshot(JSON.parse(e.data)));
+        state.es.addEventListener('agent', e => onAgentVerdict(JSON.parse(e.data)));
+        state.es.addEventListener('consensus', e => onConsensus(JSON.parse(e.data)));
+        state.es.addEventListener('error', e => { try { onStreamError(JSON.parse(e.data)); } catch (_) {} });
+        state.es.addEventListener('done', () => { finishAnalysis(btn); });
+        state.es.onerror = () => { finishAnalysis(btn); if (state.es) state.es.close(); state.es = null; };
+    } else {
+        // fallback
+        try {
+            const data = await API.post('/api/analyze', { symbol, strategy, timeframe });
+            onSnapshot({ symbol, timeframe, price: data.price, features: data.features, strategy: data.strategy });
+            data.agents.forEach(onAgentVerdict);
+            onConsensus({ consensus: data.consensus, signal: data.signal });
+        } catch (e) { log('error', 'Ошибка анализа: ' + e.message); }
+        finishAnalysis(btn);
     }
 }
 
-function renderConsensus(data) {
-    document.getElementById('consensus-symbol').textContent =
-        `${data.symbol} · ${data.timeframe} · цена ${fmtPrice(data.price)} · стратегия: ${data.strategy.name}`;
-
-    const cons = data.consensus;
-    const sig = data.signal;
-    const confPct = Math.round(cons.confidence * 100);
-
-    const html = `
-        <div class="consensus-verdict">
-            <div class="verdict-badge ${cons.side}">${cons.side}</div>
-            <div>
-                <div class="muted">Уверенность консенсуса</div>
-                <div style="font-size:22px;font-weight:700;font-family:var(--mono)">${confPct}%</div>
-                <div class="conf-bar" style="width:220px"><div style="width:${confPct}%"></div></div>
-            </div>
-            <div>
-                <div class="muted">Действие</div>
-                <div class="pill ${sig.action === 'BUY' ? 'long' : sig.action === 'SELL' ? 'short' : ''}" style="font-size:14px">${sig.action || 'WAIT'}</div>
-            </div>
-            <div style="flex:1" class="muted">${sig.reason || ''}</div>
-        </div>
-        <div class="agents-row">
-            ${data.agents.map(a => `
-                <div class="agent-card">
-                    <div class="a-head"><span>${a.icon}</span><span class="a-name">${a.name}</span></div>
-                    <div class="a-model">${a.demo ? '[DEMO] ' : ''}${a.model}</div>
-                    <div class="a-verdict">
-                        <span class="pill ${a.side === 'LONG' ? 'long' : a.side === 'SHORT' ? 'short' : ''}">${a.side}</span>
-                        conf ${fmt(a.confidence * 100, 0)}%
-                    </div>
-                    <div class="a-reason">${(a.reason || '').slice(0, 140)}</div>
-                </div>
-            `).join('')}
-        </div>`;
-    document.getElementById('consensus-body').innerHTML = html;
+function finishAnalysis(btn) {
+    if (btn) { btn.disabled = false; btn.innerHTML = '🤖 Анализ агентов'; }
+    setAgentState('all', 'active');
+    if (state.es) { state.es.close(); state.es = null; }
 }
 
-/* ---------- Backtest ---------- */
-let lastBacktest = null;
+function onSnapshot(d) {
+    const root = document.getElementById('tree-root');
+    if (!root) return;
+    document.getElementById('consensus-symbol').textContent =
+        `${d.symbol} · ${d.timeframe} · цена ${fmtPrice(d.price)} · стратегия: ${d.strategy.name}`;
+    const sig = d.strategy_signal;
+    root.insertAdjacentHTML('beforeend', `
+        <div class="tree-branch">
+            <div class="tree-agent" style="opacity:.75">
+                <span class="t-icon">📊</span>
+                <div>
+                    <div class="t-name">Индикаторная стратегия · <span class="muted">${d.strategy.name}</span></div>
+                    <div class="a-verdict" style="margin-top:4px">
+                        <span class="pill ${sig && sig.side === 'LONG' ? 'long' : sig && sig.side === 'SHORT' ? 'short' : 'neutral'}">${sig ? sig.side : '—'}</span>
+                        <span class="muted">${sig && sig.reason ? sig.reason : ''}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="thinking-indicator"><span class="pulse"></span>5 агентов размышляют…</div>
+    `);
+}
 
-document.addEventListener('DOMContentLoaded', () => {
-    document.getElementById('backtest-form').addEventListener('submit', runBacktest);
-    document.getElementById('strategy-form').addEventListener('submit', saveStrategy);
-});
+function onAgentVerdict(a) {
+    const root = document.getElementById('tree-root');
+    if (!root) return;
+    // убираем индикатор загрузки
+    root.querySelectorAll('.thinking-indicator').forEach(el => el.remove());
+    const steps = (a.thinking || []).map(s => `<div class="t-step">${escapeHtml(s)}</div>`).join('');
+    root.insertAdjacentHTML('beforeend', `
+        <div class="tree-branch">
+            <div class="tree-agent">
+                <span class="t-icon">${a.icon}</span>
+                <div style="flex:1">
+                    <div style="display:flex;justify-content:space-between;align-items:center">
+                        <span class="t-name">${a.name}</span>
+                        <span class="muted" style="font-size:10px;font-family:var(--mono)">${a.demo ? 'DEMO' : a.model}</span>
+                    </div>
+                    <div class="a-verdict" style="margin-top:4px">
+                        <span class="pill ${a.side === 'LONG' ? 'long' : a.side === 'SHORT' ? 'short' : 'neutral'}">${a.side}</span>
+                        <span>conf ${fmt(a.confidence * 100, 0)}%</span>
+                    </div>
+                    ${steps ? `<div class="t-steps">${steps}</div>` : ''}
+                    ${a.reason ? `<div class="a-reason">${escapeHtml(a.reason).slice(0, 200)}</div>` : ''}
+                </div>
+            </div>
+        </div>
+    `);
+    root.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
+function onConsensus(d) {
+    const root = document.getElementById('tree-root');
+    if (!root) return;
+    const cons = d.consensus, sig = d.signal;
+    const confPct = Math.round(cons.confidence * 100);
+    root.insertAdjacentHTML('beforeend', `
+        <div class="tree-consensus">
+            <div class="consensus-verdict" style="margin-bottom:8px">
+                <div class="verdict-badge ${cons.side}">${cons.side}</div>
+                <div>
+                    <div class="muted">Уверенность консенсуса</div>
+                    <div style="font-size:20px;font-weight:700;font-family:var(--mono)">${confPct}%</div>
+                    <div class="conf-bar" style="width:200px"><div style="width:${confPct}%"></div></div>
+                </div>
+                <div>
+                    <div class="muted">Действие</div>
+                    <div class="pill ${sig.action === 'BUY' ? 'long' : sig.action === 'SELL' ? 'short' : 'neutral'}" style="font-size:14px">${sig.action || 'WAIT'}</div>
+                </div>
+                <div style="flex:1" class="muted">${escapeHtml(sig.reason || '')}</div>
+            </div>
+        </div>
+    `);
+}
+
+function onStreamError(d) {
+    const root = document.getElementById('tree-root');
+    if (root) root.insertAdjacentHTML('beforeend', `<div class="empty" style="color:var(--red)">Ошибка: ${escapeHtml(d.message || '')}</div>`);
+    log('error', 'Ошибка стриминга: ' + (d.message || ''));
+}
+
+/* =========================================================================
+   BACKTEST
+   ========================================================================= */
+let lastBacktest = null;
 
 async function runBacktest(e) {
     e.preventDefault();
@@ -351,7 +537,7 @@ async function runBacktest(e) {
 function renderBacktest(d) {
     const res = document.getElementById('backtest-results');
     res.innerHTML = `
-        <div class="muted" style="margin-bottom:10px">${d.symbol} · ${d.timeframe} · ${d.strategy} · ${d.params ? Object.entries(d.params).map(([k,v])=>k+'='+v).join(', ') : ''}</div>
+        <div class="muted" style="margin-bottom:10px">${d.symbol} · ${d.timeframe} · ${d.strategy}${d.params ? ' · ' + Object.entries(d.params).map(([k,v])=>k+'='+v).join(', ') : ''}</div>
         <div class="metrics-grid">
             ${metric('Сделок', d.total_trades)}
             ${metric('Win rate', fmt(d.win_rate) + '%', d.win_rate >= 50)}
@@ -397,7 +583,6 @@ function redrawEquity() {
 
 function saveStrategy(e) {
     e.preventDefault();
-    // Переносим параметры из редактора в форму бэктеста и переключаемся
     document.getElementById('bt-strategy').value = document.getElementById('st-type').value;
     document.getElementById('bt-tp').value = document.getElementById('st-tp').value;
     document.getElementById('bt-sl').value = document.getElementById('st-sl').value;
@@ -407,7 +592,9 @@ function saveStrategy(e) {
     log('system', `Стратегия "${currentStrategyDef().name}" готова к бэктесту`);
 }
 
-/* ---------- Live ---------- */
+/* =========================================================================
+   LIVE
+   ========================================================================= */
 function renderLive() {
     const s = state.live || {};
     const stats = document.getElementById('live-stats');
@@ -429,7 +616,7 @@ function renderLive() {
             <td>${fmtPrice(sg.entry)}</td>
             <td>${sg.status === 'CLOSED' ? fmtPrice(sg.exit_price) : '—'}</td>
             <td>${sg.status === 'CLOSED' ? (sg.pnl_pct >= 0 ? '+' : '') + fmt(sg.pnl_pct) + '%' : '—'}</td>
-            <td>${sg.status === 'CLOSED' ? `<span class="pill ${sg.exit_reason.toLowerCase()}">${sg.exit_reason}</span>` : '<span class="pill" style="background:rgba(79,140,255,.2);color:#7aa8ff">OPEN</span>'}</td>
+            <td>${sg.status === 'CLOSED' ? `<span class="pill ${sg.exit_reason.toLowerCase()}">${sg.exit_reason}</span>` : '<span class="pill neutral">OPEN</span>'}</td>
         </tr>`).join('');
     document.getElementById('signal-history').innerHTML =
         `<table class="data"><thead><tr><th>Время</th><th>Символ</th><th>Сторона</th><th>Вход</th><th>Выход</th><th>PnL</th><th>Статус</th></tr></thead><tbody>${hist}</tbody></table>`;
@@ -465,12 +652,14 @@ async function refreshLiveState() {
         const s = await API.get('/api/live/state');
         state.live = s;
         renderLive();
-    } catch (e) { /* тихо */ }
+    } catch (e) {}
 }
 
 function initLive() { refreshLiveState(); }
 
-/* ---------- WebSocket события ---------- */
+/* =========================================================================
+   WEBSOCKET события
+   ========================================================================= */
 function onWsEvent(data) {
     if (data.type === 'signal') {
         log('signal', `${data.signal.symbol} → ${data.signal.action} (${data.signal.side}, conf ${fmt(data.signal.confidence * 100, 0)}%)`, data.signal.side);
@@ -484,7 +673,9 @@ function onWsEvent(data) {
     }
 }
 
-/* ---------- Журнал ---------- */
+/* =========================================================================
+   Журнал
+   ========================================================================= */
 const MAX_LOG = 200;
 function log(kind, message, side) {
     const box = document.getElementById('agents-log');
@@ -501,13 +692,13 @@ function escapeHtml(s) {
     return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
-/* ---------- Мини-список сигналов на дашборде ---------- */
+/* ---------- Мини-список сигналов ---------- */
 const miniSignals = [];
 function renderLiveMini(signal) {
     miniSignals.unshift(signal);
     if (miniSignals.length > 10) miniSignals.pop();
     document.getElementById('live-mini-list').innerHTML = miniSignals.map(sg => `
-        <div class="signal-card" style="padding:8px;margin-bottom:6px">
+        <div class="signal-card" style="padding:9px;margin-bottom:7px">
             <div class="s-head"><span class="s-symbol" style="font-size:13px">${sg.symbol}</span>
             <span class="pill ${sg.side === 'LONG' ? 'long' : 'short'}">${sg.side}</span>
             <span class="muted">${fmt(sg.confidence * 100, 0)}%</span></div>
@@ -529,14 +720,31 @@ function renderFooterAgents() {
         </div>`).join('');
 }
 
-function setAgentState(which, state) {
+function setAgentState(which, st) {
     document.querySelectorAll('#agents-footer .agent-pill').forEach(el => {
         const dot = el.querySelector('.dot');
-        if (which === 'all' || el.dataset.agent === which) {
-            dot.className = 'dot ' + state;
-        }
+        if (which === 'all' || el.dataset.agent === which) dot.className = 'dot ' + st;
     });
 }
 
+/* ---------- Toast ---------- */
+let toastEl = null;
+function toast(msg) {
+    if (!toastEl) {
+        toastEl = document.createElement('div');
+        toastEl.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:999;background:var(--panel-solid);border:1px solid var(--border-2);color:var(--text);padding:12px 18px;border-radius:12px;font-size:13px;box-shadow:var(--shadow);transition:opacity .3s;';
+        document.body.appendChild(toastEl);
+    }
+    toastEl.textContent = msg;
+    toastEl.style.opacity = '1';
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => { toastEl.style.opacity = '0'; }, 3500);
+}
+
 /* ---------- Старт ---------- */
-document.addEventListener('DOMContentLoaded', init);
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('backtest-form').addEventListener('submit', runBacktest);
+    document.getElementById('strategy-form').addEventListener('submit', saveStrategy);
+    document.getElementById('refresh-tickers').addEventListener('click', refreshTickers);
+    init();
+});

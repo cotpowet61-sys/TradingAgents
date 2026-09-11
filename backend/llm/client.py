@@ -127,6 +127,24 @@ class LLMClient:
                 parts.append(block["text"])
         return "\n".join(parts)
 
+    async def test(self, role: str) -> dict:
+        """Проверка доступности модели роли. Возвращает {ok, latency_ms, sample, error}."""
+        import time
+        cfg = settings.model_role(role)
+        if not cfg["api_key"]:
+            return {"ok": False, "latency_ms": None, "sample": None,
+                    "error": "Нет ключа — введите API-ключ для этой роли (или глобальный)"}
+        t0 = time.time()
+        try:
+            text = await self.chat(role, [
+                {"role": "user", "content": "Ответь одним словом: ок"},
+            ], max_tokens=16)
+            return {"ok": True, "latency_ms": round((time.time() - t0) * 1000),
+                    "sample": text.strip()[:120], "error": None}
+        except Exception as e:
+            return {"ok": False, "latency_ms": round((time.time() - t0) * 1000),
+                    "sample": None, "error": str(e)[:300]}
+
     # ------------------------------------------------------------------ #
     # Демо-режим (без ключа). Детерминирован по входу, чтобы UI работал офлайн.
     # ------------------------------------------------------------------ #
@@ -148,6 +166,11 @@ class LLMClient:
             side = rng.choices(sides, weights=[0.4, 0.35, 0.25])[0]
             confidence = round(rng.uniform(0.45, 0.85), 2)
             result = {
+                "thinking": [
+                    "Анализирую тренд, объём и ключевые уровни из снимка.",
+                    "Сопоставляю с сигналом индикаторной стратегии.",
+                    "Формирую итоговую рекомендацию по стороне.",
+                ],
                 "side": side,
                 "confidence": confidence,
                 "reason": f"[DEMO] Модель роли '{role}' отвечает без API-ключа. "

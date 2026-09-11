@@ -29,20 +29,14 @@ class Orchestrator:
         self.lock = asyncio.Lock()
 
     # ------------------------------------------------------------------ #
-    # Анализ одного символа
+    # Подготовка снимка рынка (общая для analyze и analyze_stream)
     # ------------------------------------------------------------------ #
-    async def analyze(self, symbol: str, strategy_type: str = "momentum_breakout",
-                      timeframe: str = None, params: Optional[dict] = None) -> dict:
-        timeframe = timeframe or settings.DEFAULT_TIMEFRAME
+    async def _prepare(self, symbol: str, strategy_type: str, timeframe: str, params: Optional[dict]):
         candles = await self.market.get_klines(symbol, timeframe)
         strategy = build_strategy(strategy_type, params=params)
-
-        # Индикаторный сигнал стратегии
-        strat_sig: Signal = strategy.generate(candles, len(candles) - 1) if candles else None
-
+        strat_sig: Optional[Signal] = strategy.generate(candles, len(candles) - 1) if candles else None
         features = ta.compute_feature_summary(candles)
         recent = self._recent_bars(candles, 5)
-
         snapshot = {
             "symbol": symbol,
             "timeframe": timeframe,
@@ -55,8 +49,28 @@ class Orchestrator:
             "features": features,
             "recent": recent,
         }
+        return candles, strategy, strat_sig, features, snapshot
 
-        # Запускаем 5 агентов параллельно
+    def _agent_view(self, role_key: str, verdict: dict) -> dict:
+        """Представление вердикта агента для ответа API."""
+        return {
+            "role": role_key,
+            "name": roles.ROLES[role_key].name,
+            "icon": roles.ROLES[role_key].icon,
+            "model": settings.model_role(role_key)["model"],
+            "demo": settings.model_role(role_key)["api_key"] == "",
+            **verdict,
+        }
+
+    # ------------------------------------------------------------------ #
+    # Анализ одного символа
+    # ------------------------------------------------------------------ #
+    async def analyze(self, symbol: str, strategy_type: str = "momentum_breakout",
+                      timeframe: str = None, params: Optional[dict] = None) -> dict:
+        timeframe = timeframe or settings.DEFAULT_TIMEFRAME
+        candles, strategy, strat_sig, features, snapshot = await self._prepare(
+            symbol, strategy_type, timeframe, params)
+
         keys = ["strategist", "momentum", "contrarian", "macro", "risk"]
         results = await asyncio.gather(*(roles.get_agent_verdict(k, snapshot) for k in keys))
         verdicts = dict(zip(keys, results))
@@ -71,20 +85,50 @@ class Orchestrator:
             "features": features,
             "strategy": strategy.config_dict(),
             "strategy_signal": strat_sig.to_dict() if strat_sig else None,
-            "agents": [
-                {
-                    "role": k,
-                    "name": roles.ROLES[k].name,
-                    "icon": roles.ROLES[k].icon,
-                    "model": settings.model_role(k)["model"],
-                    "demo": settings.model_role(k)["api_key"] == "",
-                    **v,
-                }
-                for k, v in verdicts.items()
-            ],
+            "agents": [self._agent_view(k, v) for k, v in verdicts.items()],
             "consensus": consensus,
             "signal": final,
         }
+
+    # ------------------------------------------------------------------ #
+    # Стриминг-анализ: отдаёт события по мере готовности каждого агента.
+    # События: snapshot, agent, consensus, done.
+    # ------------------------------------------------------------------ #
+    async def analyze_stream(self, symbol: str, strategy_type: str = "momentum_breakout",
+                             timeframe: str = None, params: Optional[dict] = None):
+        timeframe = timeframe or settings.DEFAULT_TIMEFRAME
+        candles, strategy, strat_sig, features, snapshot = await self._prepare(
+            symbol, strategy_type, timeframe, params)
+
+        yield ("snapshot", {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "price": features.get("price"),
+            "features": features,
+            "strategy": strategy.config_dict(),
+            "strategy_signal": strat_sig.to_dict() if strat_sig else None,
+        })
+
+        keys = ["strategist", "momentum", "contrarian", "macro", "risk"]
+        tasks = {asyncio.create_task(roles.get_agent_verdict(k, snapshot)): k for k in keys}
+        verdicts = {}
+        pending = set(tasks.keys())
+        while pending:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for fut in done:
+                k = tasks[fut]
+                try:
+                    v = fut.result()
+                except Exception as e:
+                    v = {"side": "NEUTRAL", "confidence": 0.0, "reason": f"Ошибка: {e}",
+                         "risks": [], "thinking": [], "key_levels": {}}
+                verdicts[k] = v
+                yield ("agent", self._agent_view(k, v))
+
+        consensus = self._consensus(verdicts, strat_sig)
+        final = self._finalize(symbol, timeframe, strat_sig, consensus)
+        yield ("consensus", {"consensus": consensus, "signal": final})
+        yield ("done", {})
 
     def _recent_bars(self, candles: List[Candle], n: int) -> str:
         if not candles:
