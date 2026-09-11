@@ -1,0 +1,13 @@
+# Переводи строк для скриптов запуска
+*.bat text eol=crlf
+*.sh  text eol=lf
+
+# Python и остальное — LF
+*.py  text eol=lf
+*.js  text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.md  text eol=lf
+*.yml text eol=lf
+*.conf text eol=lf
+*.example text eol=lf

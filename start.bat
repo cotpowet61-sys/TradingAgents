@@ -1,51 +1,42 @@
 @echo off
-chcp 65001 >nul
-REM =====================================================================
-REM  TradingAgents — запуск в один клик (Windows)
-REM  Просто дважды кликните по этому файлу.
-REM =====================================================================
+setlocal
 cd /d "%~dp0"
 
 echo ==============================================
-echo   TradingAgents — запуск платформы
+echo   TradingAgents - platform launcher
 echo ==============================================
 echo.
 
-REM 1) Проверяем Python
 where python >nul 2>nul
 if %errorlevel% neq 0 (
-    echo [!] Python не найден.
-    echo     Скачайте и установите: https://www.python.org/downloads/
-    echo     ВАЖНО: при установке поставьте галочку "Add Python to PATH".
+    echo [!] Python not found.
+    echo     Download and install: https://www.python.org/downloads/
+    echo     IMPORTANT: check "Add Python to PATH" during install.
     pause
     exit /b 1
 )
 
-REM 2) Виртуальное окружение
 if not exist ".venv" (
-    echo [1/3] Создаю виртуальное окружение...
+    echo [1/3] Creating virtual environment...
     python -m venv .venv
 )
 call .venv\Scripts\activate.bat
 
-REM 3) Зависимости
-echo [2/3] Устанавливаю зависимости...
+echo [2/3] Installing dependencies...
 python -m pip install --quiet --upgrade pip
 python -m pip install --quiet -r backend\requirements.txt
 
-REM 4) .env
 if not exist ".env" (
     copy .env.example .env >nul
-    echo       Создан файл .env. Ключи можно ввести позже в интерфейсе.
+    echo       Created .env file. You can enter API keys later in the web UI.
 )
 
-REM 5) Открываем браузер и запускаем
-echo [3/3] Запускаю сервер...
+echo [3/3] Starting server...
 echo.
-echo   Открываю браузер: http://localhost:3002
-echo   (закройте это окно, чтобы остановить)
+echo   Opening browser: http://localhost:3002
+echo   Close this window to stop the server.
 echo.
-start "" http://localhost:3002
+start "TradingAgents" http://localhost:3002
 
 cd backend
 python main.py
