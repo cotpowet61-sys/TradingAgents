@@ -1,18 +1,31 @@
+# Секреты и локальные настройки
 .env
 *.key
 *.pem
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.so
 .Python
+.venv/
 venv/
 env/
+
+# Данные
 data/*.parquet
 data/*.csv
+data/*.db
 *.db
+*.sqlite
+*.sqlite3
+
+# Редакторы / ОС
 .vscode/
 .idea/
-*.log
 .DS_Store
 Thumbs.db
+
+# Логи
+*.log
