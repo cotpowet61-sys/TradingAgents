@@ -48,6 +48,84 @@ function drawCandles(canvas, candles) {
     ctx.fillText(fmtPrice(min - pad), 6, H - 24);
 }
 
+/* Свечной график с маркерами сделок (бэктест: видно как проходили сделки) */
+function drawCandlesWithTrades(canvas, candles, trades) {
+    if (!canvas || !candles || !candles.length) return;
+    const ctx = setupCanvas(canvas);
+    const W = canvas.clientWidth, H = canvas.clientHeight;
+    ctx.clearRect(0, 0, W, H);
+
+    const highs = candles.map(c => c.high);
+    const lows = candles.map(c => c.low);
+    const min = Math.min(...lows), max = Math.max(...highs);
+    const pad = (max - min) * 0.08 || 1;
+    const y = v => H - 26 - ((v - (min - pad)) / ((max + pad) - (min - pad))) * (H - 46);
+    const n = candles.length;
+    const cw = W / n;
+    const x = i => i * cw + cw / 2;
+
+    // свечи
+    for (let i = 0; i < n; i++) {
+        const c = candles[i];
+        const up = c.close >= c.open;
+        ctx.strokeStyle = up ? 'rgba(52,211,153,.85)' : 'rgba(248,113,113,.85)';
+        ctx.fillStyle = up ? 'rgba(52,211,153,.6)' : 'rgba(248,113,113,.6)';
+        ctx.beginPath();
+        ctx.moveTo(x(i), y(c.high));
+        ctx.lineTo(x(i), y(c.low));
+        ctx.stroke();
+        const bodyTop = y(Math.max(c.open, c.close));
+        const bodyH = Math.max(1, y(Math.min(c.open, c.close)) - bodyTop);
+        ctx.fillRect(x(i) - cw * 0.28, bodyTop, cw * 0.56, bodyH);
+    }
+
+    // маркеры сделок
+    (trades || []).forEach(t => {
+        const ei = t.chart_entry_index;
+        const xi = t.chart_exit_index;
+        if (ei == null || ei < 0 || ei >= n) return;
+        const isLong = t.side === 'LONG';
+        const color = t.pnl_pct >= 0 ? '#34d399' : '#f87171';
+
+        // вход: треугольник
+        const ex = x(ei), ey = y(t.entry);
+        ctx.fillStyle = isLong ? '#34d399' : '#f87171';
+        ctx.beginPath();
+        if (isLong) { ctx.moveTo(ex, ey - 7); ctx.lineTo(ex - 5, ey + 3); ctx.lineTo(ex + 5, ey + 3); }
+        else { ctx.moveTo(ex, ey + 7); ctx.lineTo(ex - 5, ey - 3); ctx.lineTo(ex + 5, ey - 3); }
+        ctx.closePath();
+        ctx.fill();
+
+        // выход: крестик (только если в пределах)
+        if (xi != null && xi >= 0 && xi < n) {
+            const xx = x(xi), xy = y(t.exit);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1.6;
+            ctx.beginPath();
+            ctx.moveTo(xx - 4, xy - 4); ctx.lineTo(xx + 4, xy + 4);
+            ctx.moveTo(xx + 4, xy - 4); ctx.lineTo(xx - 4, xy + 4);
+            ctx.stroke();
+            // линия от входа к выходу
+            ctx.setLineDash([3, 3]);
+            ctx.strokeStyle = color;
+            ctx.globalAlpha = 0.55;
+            ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(xx, xy); ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.globalAlpha = 1;
+        }
+    });
+
+    // подписи цен + легенда
+    ctx.fillStyle = '#8b98ad';
+    ctx.font = '11px monospace';
+    ctx.fillText(fmtPrice(max + pad), 6, 14);
+    ctx.fillText(fmtPrice(min - pad), 6, H - 30);
+    ctx.fillStyle = '#34d399';
+    ctx.fillText('▲ вход LONG', 10, H - 12);
+    ctx.fillStyle = '#f87171';
+    ctx.fillText('▼ вход SHORT · × выход', 130, H - 12);
+}
+
 /* Equity-кривая бэктеста */
 function drawEquity(canvas, curve) {
     if (!canvas || !curve || !curve.length) return;

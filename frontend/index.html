@@ -111,6 +111,28 @@
 
 <!-- ============ BACKTEST ============ -->
 <section class="panel" id="panel-backtest">
+    <div class="card">
+        <div class="card-head">
+            <h2>🎯 Оптимизация — найти лучшие стратегии под монету</h2>
+            <span class="muted">прогоняет все 23 стратегии и выбирает лучшие для live-сигналов</span>
+        </div>
+        <div class="card-body">
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+                <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--text-dim)">Символ
+                    <select id="opt-symbol" required></select>
+                </label>
+                <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--text-dim)">Таймфрейм
+                    <select id="opt-timeframe">
+                        <option>1m</option><option>3m</option><option selected>5m</option>
+                        <option>15m</option><option>30m</option><option>1h</option>
+                    </select>
+                </label>
+                <button id="optimize-btn" class="btn btn-primary">⚡ Подобрать лучшие стратегии</button>
+                <span class="muted" id="optimize-status"></span>
+            </div>
+            <div id="optimize-results" style="margin-top:14px"><div class="empty">Нажмите «Подобрать» — система прогонит все стратегии и покажет топ</div></div>
+        </div>
+    </div>
     <div class="two-col">
         <div class="card">
             <div class="card-head"><h2>Параметры бэктеста</h2></div>
@@ -144,6 +166,10 @@
                 <div class="empty">Запустите бэктест, чтобы увидеть метрики</div>
             </div>
         </div>
+    </div>
+    <div class="card">
+        <div class="card-head"><h2>📈 Как проходили сделки (график)</h2></div>
+        <div class="card-body"><canvas id="trades-canvas" height="300"></canvas></div>
     </div>
     <div class="card">
         <div class="card-head"><h2>Кривая капитала (equity)</h2></div>

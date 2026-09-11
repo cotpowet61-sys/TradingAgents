@@ -22,12 +22,14 @@ from typing import List, Optional
 from config import settings
 from data.market_data import MarketData
 from agents.orchestrator import get_orchestrator
+from strategies.selector import get_selector
 
 
 class LiveEngine:
     def __init__(self):
         self.orchestrator = get_orchestrator()
         self.market = self.orchestrator.market
+        self.selector = get_selector()
         self.signals: List[dict] = []        # все сигналы (история)
         self.active: List[dict] = []         # активные сигналы
         self.day_counter = {"date": None, "count": 0}
@@ -83,8 +85,7 @@ class LiveEngine:
     async def scan_once(self):
         if not settings.AUTO_SCAN:
             return
-        strategy = "momentum_breakout"
-        results = await self.orchestrator.scan_market(strategy_type=strategy)
+        results = await self.orchestrator.scan_market()
         for r in results:
             sig = r.get("signal", {})
             if sig.get("action") in ("BUY", "SELL") and r.get("price"):

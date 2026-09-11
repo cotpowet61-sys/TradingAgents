@@ -235,12 +235,16 @@ class Orchestrator:
                 "confidence": 0.0, "action": "WAIT", "reason": reason}
 
     # ------------------------------------------------------------------ #
-    # Скан всего рынка
+    # Скан всего рынка. strategy_type="auto" — подбирает лучшую стратегию
+    # для каждой монеты из профиля оптимизатора (адаптивный режим).
     # ------------------------------------------------------------------ #
-    async def scan_market(self, symbols: Optional[List[str]] = None, strategy_type: str = "momentum_breakout",
+    async def scan_market(self, symbols: Optional[List[str]] = None,
+                          strategy_type: str = "auto",
                           timeframe: str = None) -> list[dict]:
+        from strategies.selector import get_selector
         symbols = symbols or settings.symbols
         timeframe = timeframe or settings.DEFAULT_TIMEFRAME
+        selector = get_selector()
 
         # Ограничиваем параллелизм, чтобы не перегружать API
         sem = asyncio.Semaphore(4)
@@ -248,7 +252,10 @@ class Orchestrator:
         async def one(sym):
             async with sem:
                 try:
-                    return await self.analyze(sym, strategy_type, timeframe)
+                    st = strategy_type
+                    if st in (None, "", "auto"):
+                        st = selector.best_strategy(sym, timeframe)
+                    return await self.analyze(sym, st, timeframe)
                 except Exception as e:
                     return {"symbol": sym, "error": str(e), "signal": {"side": "NEUTRAL", "action": "WAIT"}}
 

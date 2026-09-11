@@ -27,6 +27,7 @@ import uvicorn
 from config import settings, ENV_PATH, ENV_EXAMPLE_PATH
 from data.market_data import MarketData
 from strategies.registry import build_strategy, STRATEGY_SCHEMAS
+from strategies.selector import get_selector
 from backtest.engine import run_backtest
 from agents.orchestrator import get_orchestrator
 from agents import roles
@@ -145,7 +146,40 @@ async def backtest(req: BacktestRequest):
     out["tp_pct"] = strategy.tp_pct
     out["sl_pct"] = strategy.sl_pct
     out["max_hold_hours"] = strategy.max_hold_hours
+    # Свечи для отрисовки сделок на графике (не более 400 — для скорости)
+    chart_candles = candles[-400:]
+    out["candles"] = [c.to_dict() for c in chart_candles]
+    # Сдвигаем индексы сделок под обрезанный массив свечей
+    offset = len(candles) - len(chart_candles)
+    for t in out["trades"]:
+        t["chart_entry_index"] = t["entry_index"] - offset
+        t["chart_exit_index"] = t["exit_index"] - offset
     return out
+
+
+# ---------------------------------------------------------------------- #
+# Оптимизация: прогон всех стратегий по символу, выбор лучших
+# ---------------------------------------------------------------------- #
+class OptimizeRequest(BaseModel):
+    symbol: str
+    timeframe: str = "5m"
+    limit: int = 500
+    min_trades: int = 10
+    min_win_rate: float = 55.0
+    top_n: int = 5
+
+
+@app.post("/api/optimize")
+async def optimize(req: OptimizeRequest):
+    selector = get_selector()
+    return await selector.optimize(req.symbol, req.timeframe, req.limit,
+                                   req.min_trades, req.min_win_rate, req.top_n)
+
+
+@app.get("/api/optimize/profiles")
+async def optimize_profiles():
+    selector = get_selector()
+    return {"profiles": selector.all_profiles()}
 
 
 # ---------------------------------------------------------------------- #

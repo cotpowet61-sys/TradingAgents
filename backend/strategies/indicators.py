@@ -120,6 +120,224 @@ def donchian(high: np.ndarray, low: np.ndarray, period: int = 20):
     return upper, lower
 
 
+def stochastic(high: np.ndarray, low: np.ndarray, close: np.ndarray,
+               k_period: int = 14, d_period: int = 3):
+    """Stochastic %K и %D."""
+    k = np.full(len(close), np.nan)
+    for i in range(len(close)):
+        j = max(0, i - k_period + 1)
+        hh = np.max(high[j:i + 1])
+        ll = np.min(low[j:i + 1])
+        k[i] = 100.0 if hh == ll else (close[i] - ll) / (hh - ll) * 100.0
+    d = sma(k, d_period)
+    return k, d
+
+
+def adx(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14):
+    """ADX + направленные индикаторы +DI/-DI (Wilder)."""
+    n = len(close)
+    up = np.zeros(n)
+    down = np.zeros(n)
+    for i in range(1, n):
+        up[i] = high[i] - high[i - 1]
+        down[i] = low[i - 1] - low[i]
+    plus_dm = np.where((up > down) & (up > 0), up, 0.0)
+    minus_dm = np.where((down > up) & (down > 0), down, 0.0)
+    tr = np.zeros(n)
+    tr[0] = high[0] - low[0]
+    for i in range(1, n):
+        tr[i] = max(high[i] - low[i], abs(high[i] - close[i - 1]), abs(low[i] - close[i - 1]))
+    # сглаживание Wilder
+    def _wilder(x):
+        out = np.full(n, np.nan)
+        if n <= period:
+            return out
+        out[period] = np.sum(x[1:period + 1])
+        for i in range(period + 1, n):
+            out[i] = out[i - 1] - out[i - 1] / period + x[i]
+        return out
+    atr_w = _wilder(tr)
+    plus_di = np.full(n, np.nan)
+    minus_di = np.full(n, np.nan)
+    dx = np.full(n, np.nan)
+    for i in range(period, n):
+        if atr_w[i] == 0:
+            continue
+        pdi = 100 * plus_dm[i] / atr_w[i]
+        mdi = 100 * minus_dm[i] / atr_w[i]
+        plus_di[i] = pdi
+        minus_di[i] = mdi
+        denom = pdi + mdi
+        dx[i] = 100 * abs(pdi - mdi) / denom if denom else 0.0
+    adx_line = sma(dx, period)
+    return adx_line, plus_di, minus_di
+
+
+def supertrend(high: np.ndarray, low: np.ndarray, close: np.ndarray,
+               period: int = 10, multiplier: float = 3.0):
+    """Supertrend: возвращает (направление, линия). Направление +1 = бычий."""
+    n = len(close)
+    atr_line = atr(high, low, close, period)
+    upper = np.full(n, np.nan)
+    lower = np.full(n, np.nan)
+    direction = np.zeros(n)
+    trend = np.full(n, np.nan)
+    hl2 = (high + low) / 2
+    for i in range(1, n):
+        if np.isnan(atr_line[i]):
+            continue
+        ub = hl2[i] + multiplier * atr_line[i]
+        lb = hl2[i] - multiplier * atr_line[i]
+        upper[i] = ub if (np.isnan(upper[i - 1]) or ub < upper[i - 1] or close[i - 1] > upper[i - 1]) else upper[i - 1]
+        lower[i] = lb if (np.isnan(lower[i - 1]) or lb > lower[i - 1] or close[i - 1] < lower[i - 1]) else lower[i - 1]
+        if not np.isnan(trend[i - 1]):
+            prev_dir = direction[i - 1]
+            if prev_dir >= 0:
+                direction[i] = -1 if close[i] < lower[i] else 1
+            else:
+                direction[i] = 1 if close[i] > upper[i] else -1
+        else:
+            direction[i] = 1
+        trend[i] = lower[i] if direction[i] >= 0 else upper[i]
+    return direction, trend
+
+
+def parabolic_sar(high: np.ndarray, low: np.ndarray, step: float = 0.02, max_step: float = 0.2):
+    """Parabolic SAR: возвращает массив SAR и направление (+1 восходящий)."""
+    n = len(high)
+    sar = np.full(n, np.nan)
+    direction = np.ones(n)
+    if n == 0:
+        return sar, direction
+    # начальная инициализация
+    sar[0] = low[0]
+    ep = high[0]
+    af = step
+    trend_up = True
+    for i in range(1, n):
+        if trend_up:
+            sar[i] = sar[i - 1] + af * (ep - sar[i - 1])
+            if low[i] < sar[i]:
+                trend_up = False
+                sar[i] = ep
+                ep = low[i]
+                af = step
+                direction[i] = -1
+            else:
+                if high[i] > ep:
+                    ep = high[i]
+                    af = min(af + step, max_step)
+                if low[i - 1] < sar[i]:
+                    sar[i] = low[i - 1]
+                if low[i - 2] < sar[i] and i >= 2:
+                    sar[i] = low[i - 2]
+                direction[i] = 1
+        else:
+            sar[i] = sar[i - 1] - af * (sar[i - 1] - ep)
+            if high[i] > sar[i]:
+                trend_up = True
+                sar[i] = ep
+                ep = high[i]
+                af = step
+                direction[i] = 1
+            else:
+                if low[i] < ep:
+                    ep = low[i]
+                    af = min(af + step, max_step)
+                if high[i - 1] > sar[i]:
+                    sar[i] = high[i - 1]
+                if high[i - 2] > sar[i] and i >= 2:
+                    sar[i] = high[i - 2]
+                direction[i] = -1
+    return sar, direction
+
+
+def cci(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 20):
+    """Commodity Channel Index."""
+    n = len(close)
+    out = np.full(n, np.nan)
+    tp = (high + low + close) / 3.0
+    for i in range(period - 1, n):
+        seg = tp[i - period + 1: i + 1]
+        mean = np.mean(seg)
+        mad = np.mean(np.abs(seg - mean))
+        out[i] = (tp[i] - mean) / (0.015 * mad) if mad else 0.0
+    return out
+
+
+def williams_r(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14):
+    """Williams %R (от -100 до 0)."""
+    n = len(close)
+    out = np.full(n, np.nan)
+    for i in range(period - 1, n):
+        hh = np.max(high[i - period + 1: i + 1])
+        ll = np.min(low[i - period + 1: i + 1])
+        out[i] = -100.0 if hh == ll else (hh - close[i]) / (hh - ll) * -100.0
+    return out
+
+
+def mfi(high: np.ndarray, low: np.ndarray, close: np.ndarray, volume: np.ndarray, period: int = 14):
+    """Money Flow Index."""
+    n = len(close)
+    out = np.full(n, np.nan)
+    tp = (high + low + close) / 3.0
+    mf = tp * volume
+    for i in range(period, n):
+        pos = neg = 0.0
+        for j in range(i - period + 1, i + 1):
+            if tp[j] > tp[j - 1]:
+                pos += mf[j]
+            elif tp[j] < tp[j - 1]:
+                neg += mf[j]
+        out[i] = 100.0 if neg == 0 else 100 - 100 / (1 + pos / neg) if pos + neg else 50.0
+    return out
+
+
+def ichimoku(high: np.ndarray, low: np.ndarray, close: np.ndarray,
+             tenkan: int = 9, kijun: int = 26, senkou: int = 52):
+    """Упрощённый Ichimoku: возвращает (tenkan, kijun, senkou_span_a, senkou_span_b)."""
+    n = len(close)
+    def _mid(period):
+        out = np.full(n, np.nan)
+        for i in range(period - 1, n):
+            out[i] = (np.max(high[i - period + 1: i + 1]) + np.min(low[i - period + 1: i + 1])) / 2
+        return out
+    ten = _mid(tenkan)
+    kij = _mid(kijun)
+    span_a = np.full(n, np.nan)
+    span_b = np.full(n, np.nan)
+    for i in range(senkou - 1, n):
+        span_a[i] = (ten[i] + kij[i]) / 2
+        span_b[i] = (np.max(high[i - senkou + 1: i + 1]) + np.min(low[i - senkou + 1: i + 1])) / 2
+    return ten, kij, span_a, span_b
+
+
+def zscore(close: np.ndarray, period: int = 20) -> np.ndarray:
+    """Z-score цены относительно скользящей средней (для mean-reversion)."""
+    n = len(close)
+    out = np.full(n, np.nan)
+    mean = sma(close, period)
+    for i in range(period - 1, n):
+        seg = close[i - period + 1: i + 1]
+        std = np.std(seg)
+        out[i] = (close[i] - mean[i]) / std if std else 0.0
+    return out
+
+
+def pivot_levels(high: np.ndarray, low: np.ndarray, close: np.ndarray, lookback: int = 5):
+    """Свинг-пивоты: возвращает (support, resistance) — ближайшие уровни из прошлых баров."""
+    n = len(close)
+    support = np.full(n, np.nan)
+    resistance = np.full(n, np.nan)
+    for i in range(lookback, n):
+        j = i - lookback
+        hh = np.max(high[j:i])
+        ll = np.min(low[j:i])
+        support[i] = ll
+        resistance[i] = hh
+    return support, resistance
+
+
 def compute_feature_summary(candles: List[Candle]) -> dict:
     """Краткая техническая сводка для передачи агентам (текст/JSON)."""
     if not candles:

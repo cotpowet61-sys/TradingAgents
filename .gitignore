@@ -17,6 +17,7 @@ env/
 data/*.parquet
 data/*.csv
 data/*.db
+data/*.json
 *.db
 *.sqlite
 *.sqlite3

@@ -64,6 +64,7 @@ async function loadSymbols() {
         sel.value = state.currentSymbol;
         sel.addEventListener('change', () => { state.currentSymbol = sel.value; switchSymbol(); });
         document.getElementById('bt-symbol').innerHTML = state.symbols.map(s => `<option value="${s}">${s}</option>`).join('');
+        document.getElementById('opt-symbol').innerHTML = state.symbols.map(s => `<option value="${s}">${s}</option>`).join('');
     } catch (e) { log('system', 'Ошибка загрузки символов: ' + e.message); }
 }
 
@@ -550,6 +551,7 @@ function renderBacktest(d) {
             ${metric('Sharpe', fmt(d.sharpe, 2))}
         </div>`;
     drawEquity(document.getElementById('equity-canvas'), d.equity_curve || []);
+    drawCandlesWithTrades(document.getElementById('trades-canvas'), d.candles || [], d.trades || []);
     renderTradesTable(d.trades || []);
 }
 
@@ -590,6 +592,80 @@ function saveStrategy(e) {
     document.getElementById('bt-params').value = document.getElementById('st-params').value;
     document.querySelector('.nav-btn[data-tab="backtest"]').click();
     log('system', `Стратегия "${currentStrategyDef().name}" готова к бэктесту`);
+}
+
+/* =========================================================================
+   ОПТИМИЗАЦИЯ (подбор лучших стратегий под монету)
+   ========================================================================= */
+async function runOptimize() {
+    const btn = document.getElementById('optimize-btn');
+    const status = document.getElementById('optimize-status');
+    btn.disabled = true; btn.textContent = '⏳ Прогон всех стратегий…';
+    status.textContent = 'прогоняю 23 стратегии…';
+    try {
+        const data = await API.post('/api/optimize', {
+            symbol: document.getElementById('opt-symbol').value,
+            timeframe: document.getElementById('opt-timeframe').value,
+            limit: 400,
+        });
+        renderOptimize(data);
+        status.textContent = `готово: отобрано ${data.top_strategies.length} стратегий`;
+        log('system', `Оптимизация ${data.symbol}: лучшие стратегии → ${data.top_strategies.join(', ')} (используются в live)`);
+    } catch (e) {
+        status.textContent = 'ошибка';
+        log('error', 'Ошибка оптимизации: ' + e.message);
+    } finally {
+        btn.disabled = false; btn.textContent = '⚡ Подобрать лучшие стратегии';
+    }
+}
+
+function renderOptimize(d) {
+    const box = document.getElementById('optimize-results');
+    if (d.error) { box.innerHTML = `<div class="empty" style="color:var(--red)">${d.error}</div>`; return; }
+
+    const selected = d.selected || [];
+    const topRow = selected.map(s => `
+        <div class="strategy-item" style="margin-bottom:6px;cursor:pointer" data-type="${s.type}">
+            <h3>${s.name} <span class="pill long">✓ отобрано</span></h3>
+            <div style="display:flex;gap:14px;margin-top:6px;font-family:var(--mono);font-size:12px">
+                <span class="up">win rate ${fmt(s.win_rate)}%</span>
+                <span>PnL ${fmt(s.pnl_pct)}%</span>
+                <span>сделок ${s.trades}</span>
+                <span class="muted">score ${s.score}</span>
+            </div>
+        </div>`).join('');
+
+    // таблица всех стратегий (сортированы)
+    const rows = (d.strategies || []).slice(0, 23).map(s => `
+        <tr class="${s.selected ? '' : ''}">
+            <td>${s.selected ? '✅' : ''} ${s.name}</td>
+            <td class="${s.win_rate >= 55 ? 'up' : ''}">${fmt(s.win_rate)}%</td>
+            <td class="${s.pnl_pct >= 0 ? 'up' : 'down'}">${fmt(s.pnl_pct)}%</td>
+            <td>${s.trades}</td>
+            <td>${s.profit_factor === null ? '∞' : fmt(s.profit_factor)}</td>
+            <td>${fmt(s.max_drawdown)}%</td>
+            <td>${fmt(s.score)}</td>
+            <td><button class="btn btn-ghost btn-sm" data-bt="${s.type}">Бэктест</button></td>
+        </tr>`).join('');
+
+    box.innerHTML = `
+        ${selected.length ? `<div class="muted" style="margin-bottom:8px">Эти стратегии теперь используются в live-режиме для ${d.symbol} (авто-подбор):</div>` + `<div class="agents-row" style="grid-template-columns:repeat(auto-fill,minmax(240px,1fr))">${topRow}</div>` : `<div class="empty">Не нашлось стратегий, прошедших фильтры (сделок ≥ ${d.filters.min_trades}, win rate ≥ ${d.filters.min_win_rate}%)</div>`}
+        <div class="table-wrap" style="margin-top:12px">
+            <table class="data">
+                <thead><tr><th>Стратегия</th><th>Win rate</th><th>PnL</th><th>Сделок</th><th>PF</th><th>DD</th><th>Score</th><th></th></tr></thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>`;
+
+    // клик по стратегии → подставить в бэктест
+    box.querySelectorAll('[data-bt]').forEach(b => {
+        b.addEventListener('click', () => {
+            document.getElementById('bt-strategy').value = b.dataset.bt;
+            document.querySelector('.nav-btn[data-tab="backtest"]').click();
+            document.querySelector('.nav-btn[data-tab="backtest"]').scrollIntoView();
+            log('system', `Стратегия ${b.dataset.bt} подставлена в бэктест`);
+        });
+    });
 }
 
 /* =========================================================================
@@ -746,5 +822,6 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('backtest-form').addEventListener('submit', runBacktest);
     document.getElementById('strategy-form').addEventListener('submit', saveStrategy);
     document.getElementById('refresh-tickers').addEventListener('click', refreshTickers);
+    document.getElementById('optimize-btn').addEventListener('click', runOptimize);
     init();
 });
