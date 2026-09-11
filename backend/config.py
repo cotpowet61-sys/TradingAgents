@@ -92,6 +92,12 @@ class Settings(BaseSettings):
     DEMO_FALLBACK: bool = True
     KLINE_LIMIT: int = 500
 
+    # Минимальный суточный объём торгов (USD) для включения монеты в список
+    MIN_DAILY_VOLUME_USD: float = 1_000_000.0
+    # Сколько топ-монет (по объёму) сканировать в live-режиме.
+    # 0 = использовать DEFAULT_SYMBOLS. >0 = топ-N монет по суточному объёму.
+    SCAN_MAX_SYMBOLS: int = 0
+
     class Config:
         env_file = ENV_PATH
         case_sensitive = True
@@ -167,6 +173,8 @@ class Settings(BaseSettings):
                 "scan_interval_seconds": self.SCAN_INTERVAL_SECONDS,
                 "auto_scan": self.AUTO_SCAN,
                 "demo_fallback": self.DEMO_FALLBACK,
+                "min_daily_volume_usd": self.MIN_DAILY_VOLUME_USD,
+                "scan_max_symbols": self.SCAN_MAX_SYMBOLS,
             },
         }
 
@@ -201,6 +209,8 @@ class Settings(BaseSettings):
         "scan_interval_seconds": ("SCAN_INTERVAL_SECONDS", "SCAN_INTERVAL_SECONDS"),
         "auto_scan": ("AUTO_SCAN", "AUTO_SCAN"),
         "demo_fallback": ("DEMO_FALLBACK", "DEMO_FALLBACK"),
+        "min_daily_volume_usd": ("MIN_DAILY_VOLUME_USD", "MIN_DAILY_VOLUME_USD"),
+        "scan_max_symbols": ("SCAN_MAX_SYMBOLS", "SCAN_MAX_SYMBOLS"),
     }
 
     def apply_update(self, updates: Dict[str, Any]) -> Dict[str, str]:

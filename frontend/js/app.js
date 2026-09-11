@@ -10,6 +10,7 @@ const state = {
     tvWidget: null,
     config: null,
     es: null, // текущий EventSource (стриминг-анализ)
+    tvLoading: false,
 };
 
 /* ---------- Навигация по вкладкам ---------- */
@@ -40,7 +41,7 @@ async function init() {
     renderRules();
     renderFooterAgents();
     initChart();
-    initTickers();
+    refreshTickers();
     initLive();
 
     connectWS(onWsEvent, (s) => { state.live = s || {}; renderLive(); });
@@ -54,18 +55,31 @@ function setDemoBadge(demo) {
     else { b.textContent = 'LIVE · AI'; b.className = 'badge live'; }
 }
 
-/* ---------- Символы ---------- */
+/* ---------- Символы (все монеты с суточным объёмом >= $1M) ---------- */
 async function loadSymbols() {
+    let symbols = [];
     try {
-        const data = await API.get('/api/symbols');
-        state.symbols = data.symbols || [];
-        const sel = document.getElementById('chart-symbol');
-        sel.innerHTML = state.symbols.map(s => `<option value="${s}">${s}</option>`).join('');
-        sel.value = state.currentSymbol;
-        sel.addEventListener('change', () => { state.currentSymbol = sel.value; switchSymbol(); });
-        document.getElementById('bt-symbol').innerHTML = state.symbols.map(s => `<option value="${s}">${s}</option>`).join('');
-        document.getElementById('opt-symbol').innerHTML = state.symbols.map(s => `<option value="${s}">${s}</option>`).join('');
-    } catch (e) { log('system', 'Ошибка загрузки символов: ' + e.message); }
+        // все монеты с объёмом > $1M за сутки
+        const data = await API.get('/api/tickers?all=true');
+        symbols = (data.tickers || []).map(t => t.symbol);
+    } catch (e) {}
+    if (!symbols.length) {
+        try {
+            const d = await API.get('/api/symbols');
+            symbols = d.symbols || [];
+        } catch (e) {}
+    }
+    state.symbols = symbols;
+
+    const sel = document.getElementById('chart-symbol');
+    sel.innerHTML = symbols.map(s => `<option value="${s}">${s}</option>`).join('');
+    if (symbols.length) state.currentSymbol = symbols[0];
+    sel.value = state.currentSymbol;
+    sel.addEventListener('change', () => { state.currentSymbol = sel.value; switchSymbol(); });
+
+    const opts = symbols.map(s => `<option value="${s}">${s}</option>`).join('');
+    document.getElementById('bt-symbol').innerHTML = opts;
+    document.getElementById('opt-symbol').innerHTML = opts;
 }
 
 /* ---------- Стратегии ---------- */
@@ -271,14 +285,20 @@ function val(id) { const el = document.getElementById(id); return el ? el.value.
    ========================================================================= */
 async function refreshTickers() {
     try {
-        const data = await API.get('/api/tickers');
+        const data = await API.get('/api/tickers?all=true');
         renderTickers(data.tickers || []);
     } catch (e) {}
 }
 
 function renderTickers(tickers) {
     const box = document.getElementById('coins-list');
-    box.innerHTML = tickers.map(t => {
+    // показываем топ-200 по объёму (список уже отсортирован)
+    const shown = tickers.slice(0, 200);
+    let header = '';
+    if (tickers.length > shown.length) {
+        header = `<div class="muted" style="padding:8px 12px">Показаны топ-${shown.length} из ${tickers.length} монет (объём ≥ $1M/сут)</div>`;
+    }
+    const items = shown.map(t => {
         const cls = t.change24h >= 0 ? 'up' : 'down';
         const sign = t.change24h >= 0 ? '+' : '';
         return `
@@ -290,6 +310,7 @@ function renderTickers(tickers) {
                 <div class="coin-last">${fmtPrice(t.last)}</div>
             </div>`;
     }).join('');
+    box.innerHTML = header + items;
     box.querySelectorAll('.coin-item').forEach(el => {
         el.addEventListener('click', () => {
             state.currentSymbol = el.dataset.symbol;
@@ -302,8 +323,11 @@ function renderTickers(tickers) {
 }
 
 /* =========================================================================
-   CHART
+   CHART: по умолчанию собственный canvas-график (всегда работает),
+   TradingView — опционально по кнопке.
    ========================================================================= */
+let chartMode = 'canvas'; // 'canvas' | 'tv'
+
 function initChart() {
     const tfGroup = document.getElementById('tf-group');
     ['1m', '3m', '5m', '15m', '30m', '1h', '4h'].forEach(tf => {
@@ -319,56 +343,103 @@ function initChart() {
         tfGroup.appendChild(b);
     });
 
-    if (window.TradingView) {
-        try {
-            state.tvWidget = new TradingView.widget({
-                container_id: 'tradingview-chart',
-                autosize: true,
-                symbol: `BYBIT:${state.currentSymbol}`,
-                interval: state.currentTF,
-                timezone: 'Etc/UTC',
-                theme: 'dark',
-                style: '1',
-                locale: 'ru',
-                toolbar_bg: '#131928',
-                enable_publishing: false,
-                hide_side_toolbar: false,
-                allow_symbol_change: false,
-            });
-        } catch (e) { enableFallbackChart(); }
-    } else {
-        enableFallbackChart();
-    }
-    setTimeout(() => {
-        const tvEl = document.getElementById('tradingview-chart');
-        if (!tvEl || !tvEl.querySelector('iframe')) enableFallbackChart();
-    }, 4000);
-
+    // переключение режима графика
+    document.getElementById('candles-toggle').addEventListener('click', showCanvasChart);
+    document.getElementById('tv-toggle').addEventListener('click', showTradingView);
     document.getElementById('analyze-btn').addEventListener('click', runAnalysis);
+
+    // по умолчанию — canvas
+    showCanvasChart();
+
+    // авто-обновление canvas-графика
+    setInterval(() => { if (chartMode === 'canvas') loadCanvasCandles(); }, 30000);
 }
 
-function enableFallbackChart() {
+function setModeButtons() {
+    document.getElementById('candles-toggle').classList.toggle('active', chartMode === 'canvas');
+    document.getElementById('tv-toggle').classList.toggle('active', chartMode === 'tv');
+}
+
+function showCanvasChart() {
+    chartMode = 'canvas';
+    setModeButtons();
     document.getElementById('tradingview-chart').style.display = 'none';
     document.getElementById('chart-fallback').style.display = '';
-    loadFallbackCandles();
+    loadCanvasCandles();
 }
 
-async function loadFallbackCandles() {
+function showTradingView() {
+    chartMode = 'tv';
+    setModeButtons();
+    // уже создан — просто показываем
+    if (state.tvWidget) {
+        document.getElementById('tradingview-chart').style.display = '';
+        document.getElementById('chart-fallback').style.display = 'none';
+        return;
+    }
+    // загружаем скрипт TradingView лениво (только по запросу пользователя)
+    if (!window.TradingView) {
+        if (state.tvLoading) return;
+        state.tvLoading = true;
+        const s = document.createElement('script');
+        s.src = 'https://s3.tradingview.com/tv.js';
+        s.onload = () => { state.tvLoading = false; createTvWidget(); };
+        s.onerror = () => {
+            state.tvLoading = false;
+            toast('TradingView недоступен (нет доступа к s3.tradingview.com). Используем свой график.');
+            chartMode = 'canvas';
+            setModeButtons();
+            showCanvasChart();
+        };
+        document.head.appendChild(s);
+        return;
+    }
+    createTvWidget();
+}
+
+function createTvWidget() {
     try {
-        const data = await API.get(`/api/klines/${state.currentSymbol}?interval=${state.currentTF}&limit=120`);
+        state.tvWidget = new TradingView.widget({
+            container_id: 'tradingview-chart',
+            autosize: true,
+            symbol: `BYBIT:${state.currentSymbol}`,
+            interval: state.currentTF,
+            timezone: 'Etc/UTC',
+            theme: 'dark',
+            style: '1',
+            locale: 'ru',
+            toolbar_bg: '#131928',
+            enable_publishing: false,
+            hide_side_toolbar: false,
+            allow_symbol_change: false,
+        });
+        document.getElementById('tradingview-chart').style.display = '';
+        document.getElementById('chart-fallback').style.display = 'none';
+    } catch (e) {
+        toast('Ошибка TradingView. Используем свой график.');
+        chartMode = 'canvas';
+        setModeButtons();
+        showCanvasChart();
+    }
+}
+
+async function loadCanvasCandles() {
+    try {
+        const data = await API.get(`/api/klines/${state.currentSymbol}?interval=${state.currentTF}&limit=150`);
         drawCandles(document.getElementById('candles-canvas'), data.candles || []);
     } catch (e) {}
 }
 
 function switchSymbol() {
-    if (state.tvWidget && window.TradingView) {
+    if (chartMode === 'canvas') {
+        loadCanvasCandles();
+    } else if (state.tvWidget) {
         try { state.tvWidget.setSymbol(`BYBIT:${state.currentSymbol}`, state.currentTF); } catch (e) {}
     }
-    if (document.getElementById('chart-fallback').style.display !== 'none') loadFallbackCandles();
 }
 
 function resizeChart() {
-    if (document.getElementById('chart-fallback').style.display !== 'none') loadFallbackCandles();
+    if (chartMode === 'canvas') loadCanvasCandles();
 }
 
 /* =========================================================================
@@ -524,6 +595,8 @@ async function runBacktest(e) {
             tp_pct: parseFloat(document.getElementById('bt-tp').value),
             sl_pct: parseFloat(document.getElementById('bt-sl').value),
             max_hold_hours: parseFloat(document.getElementById('bt-hold').value),
+            start_date: (document.getElementById('bt-start') || {}).value || null,
+            end_date: (document.getElementById('bt-end') || {}).value || null,
         });
         lastBacktest = data;
         renderBacktest(data);
@@ -538,7 +611,7 @@ async function runBacktest(e) {
 function renderBacktest(d) {
     const res = document.getElementById('backtest-results');
     res.innerHTML = `
-        <div class="muted" style="margin-bottom:10px">${d.symbol} · ${d.timeframe} · ${d.strategy}${d.params ? ' · ' + Object.entries(d.params).map(([k,v])=>k+'='+v).join(', ') : ''}</div>
+        <div class="muted" style="margin-bottom:10px">${d.symbol} · ${d.timeframe} · ${d.strategy}${d.params ? ' · ' + Object.entries(d.params).map(([k,v])=>k+'='+v).join(', ') : ''}${d.start_date ? ` · период ${d.start_date} → ${d.end_date || 'сегодня'}` : ''}</div>
         <div class="metrics-grid">
             ${metric('Сделок', d.total_trades)}
             ${metric('Win rate', fmt(d.win_rate) + '%', d.win_rate >= 50)}

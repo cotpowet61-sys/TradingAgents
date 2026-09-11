@@ -12,6 +12,7 @@ TradingAgents — мультиагентная платформа дэйтрей
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import os
 from contextlib import asynccontextmanager
@@ -105,10 +106,23 @@ async def list_symbols():
 # Рынок
 # ---------------------------------------------------------------------- #
 @app.get("/api/tickers")
-async def tickers(symbols: Optional[str] = None):
+async def tickers(symbols: Optional[str] = None, all: bool = False):
+    # all=true — все spot-монеты с суточным объёмом >= MIN_DAILY_VOLUME_USD
+    if all:
+        data = await market.get_all_tickers()
+        return {"tickers": data, "count": len(data),
+                "min_volume_usd": settings.MIN_DAILY_VOLUME_USD}
     syms = [s.strip() for s in symbols.split(",")] if symbols else None
     data = await market.get_tickers(syms)
     return {"tickers": data}
+
+
+@app.get("/api/market/symbols")
+async def market_symbols(min_volume_usd: Optional[float] = None):
+    """Все доступные монеты (по суточному объёму). Для выпадающих списков."""
+    data = await market.get_all_tickers(min_volume_usd)
+    return {"symbols": [t["symbol"] for t in data], "count": len(data),
+            "min_volume_usd": min_volume_usd or settings.MIN_DAILY_VOLUME_USD}
 
 
 @app.get("/api/klines/{symbol}")
@@ -130,6 +144,21 @@ class BacktestRequest(BaseModel):
     tp_pct: Optional[float] = None
     sl_pct: Optional[float] = None
     max_hold_hours: Optional[float] = None
+    # Диапазон дат (необязательно). Формат "YYYY-MM-DD".
+    # Если заданы — используются вместо limit.
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+
+
+def _parse_date(s: Optional[str]) -> Optional[int]:
+    """'YYYY-MM-DD' -> unix ms. Возвращает None, если строка пустая/некорректная."""
+    if not s:
+        return None
+    try:
+        d = datetime.datetime.fromisoformat(s.strip())
+        return int(d.timestamp() * 1000)
+    except (ValueError, TypeError):
+        return None
 
 
 @app.post("/api/backtest")
@@ -137,15 +166,24 @@ async def backtest(req: BacktestRequest):
     strategy = build_strategy(req.strategy, req.params, req.tp_pct, req.sl_pct, req.max_hold_hours)
     if strategy is None:
         raise HTTPException(404, f"Стратегия '{req.strategy}' не найдена")
-    candles = await market.get_klines(req.symbol, req.timeframe, req.limit)
+
+    start_ts = _parse_date(req.start_date)
+    end_ts = _parse_date(req.end_date)
+    if end_ts:
+        end_ts += 86_400_000 - 1  # включить весь конечный день
+
+    candles = await market.get_klines(req.symbol, req.timeframe, req.limit, start_ts, end_ts)
     if not candles:
-        raise HTTPException(400, "Нет данных для бэктеста")
+        raise HTTPException(400, "Нет данных для бэктеста в заданном диапазоне")
+
     result = run_backtest(strategy, candles, req.timeframe, req.max_hold_hours)
     result.symbol = req.symbol
     out = result.to_dict()
     out["tp_pct"] = strategy.tp_pct
     out["sl_pct"] = strategy.sl_pct
     out["max_hold_hours"] = strategy.max_hold_hours
+    out["start_date"] = req.start_date
+    out["end_date"] = req.end_date
     # Свечи для отрисовки сделок на графике (не более 400 — для скорости)
     chart_candles = candles[-400:]
     out["candles"] = [c.to_dict() for c in chart_candles]
@@ -167,13 +205,20 @@ class OptimizeRequest(BaseModel):
     min_trades: int = 10
     min_win_rate: float = 55.0
     top_n: int = 5
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
 
 
 @app.post("/api/optimize")
 async def optimize(req: OptimizeRequest):
     selector = get_selector()
+    start_ts = _parse_date(req.start_date)
+    end_ts = _parse_date(req.end_date)
+    if end_ts:
+        end_ts += 86_400_000 - 1
     return await selector.optimize(req.symbol, req.timeframe, req.limit,
-                                   req.min_trades, req.min_win_rate, req.top_n)
+                                   req.min_trades, req.min_win_rate, req.top_n,
+                                   start_ts=start_ts, end_ts=end_ts)
 
 
 @app.get("/api/optimize/profiles")

@@ -85,11 +85,29 @@ class LiveEngine:
     async def scan_once(self):
         if not settings.AUTO_SCAN:
             return
-        results = await self.orchestrator.scan_market()
+        symbols = await self._scan_symbols()
+        results = await self.orchestrator.scan_market(symbols=symbols)
         for r in results:
             sig = r.get("signal", {})
             if sig.get("action") in ("BUY", "SELL") and r.get("price"):
                 await self._maybe_open_signal(r, sig)
+
+    async def _scan_symbols(self) -> List[str]:
+        """Список символов для сканирования.
+
+        Если SCAN_MAX_SYMBOLS > 0 — берём топ-N монет по суточному объёму
+        (все монеты с объёмом >= MIN_DAILY_VOLUME_USD уже отфильтрованы).
+        Иначе — DEFAULT_SYMBOLS из настроек.
+        """
+        if settings.SCAN_MAX_SYMBOLS > 0:
+            try:
+                tickers = await self.market.get_all_tickers()
+                top = [t["symbol"] for t in tickers[:settings.SCAN_MAX_SYMBOLS]]
+                if top:
+                    return top
+            except Exception:
+                pass
+        return settings.symbols
 
     async def _maybe_open_signal(self, analysis: dict, sig: dict):
         symbol = analysis["symbol"]

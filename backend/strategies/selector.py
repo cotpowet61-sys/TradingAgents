@@ -70,10 +70,12 @@ class StrategySelector:
                        limit: int = None,
                        min_trades: int = 10,
                        min_win_rate: float = 55.0,
-                       top_n: int = 5) -> dict:
+                       top_n: int = 5,
+                       start_ts: Optional[int] = None,
+                       end_ts: Optional[int] = None) -> dict:
         timeframe = timeframe or settings.DEFAULT_TIMEFRAME
         limit = limit or settings.KLINE_LIMIT
-        candles = await self.market.get_klines(symbol, timeframe, limit)
+        candles = await self.market.get_klines(symbol, timeframe, limit, start_ts, end_ts)
         if not candles:
             return {"symbol": symbol, "timeframe": timeframe, "strategies": [], "error": "нет данных"}
 

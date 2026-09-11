@@ -44,6 +44,10 @@
             <div class="chart-toolbar">
                 <select id="chart-symbol"></select>
                 <div class="tf-group" id="tf-group"></div>
+                <div class="tf-group" id="chart-mode-group" style="margin-left:6px">
+                    <button id="candles-toggle" class="tf-btn active">🕯 Свечи</button>
+                    <button id="tv-toggle" class="tf-btn">📺 TradingView</button>
+                </div>
                 <div class="spacer"></div>
                 <button id="analyze-btn" class="btn btn-primary">🤖 Анализ агентов</button>
             </div>
@@ -147,6 +151,11 @@
                         </select>
                     </label>
                     <label>Кол-во свечей <input type="number" id="bt-limit" value="500" min="50" max="2000"></label>
+                    <div style="display:flex;gap:10px">
+                        <label style="flex:1">Период с (дата) <input type="date" id="bt-start"></label>
+                        <label style="flex:1">Период по (дата) <input type="date" id="bt-end"></label>
+                    </div>
+                    <p class="muted">Если заданы даты — они заменяют «кол-во свечей». Пусто = последние свечи.</p>
                     <label>Take-Profit, % <input type="number" id="bt-tp" value="2.0" step="0.1" min="2"></label>
                     <label>Stop-Loss, % <input type="number" id="bt-sl" value="1.0" step="0.1" min="0.1"></label>
                     <label>Макс. удержание, ч <input type="number" id="bt-hold" value="4" step="0.5" min="0.1"></label>
@@ -215,7 +224,6 @@
 
 <footer class="footer" id="agents-footer"></footer>
 
-<script src="https://s3.tradingview.com/tv.js"></script>
 <script src="js/api.js"></script>
 <script src="js/charts.js"></script>
 <script src="js/app.js"></script>
