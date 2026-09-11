@@ -196,6 +196,79 @@ async def backtest(req: BacktestRequest):
 
 
 # ---------------------------------------------------------------------- #
+# Бэктест сразу по ВСЕМ стратегиям (сравнение в один клик)
+# ---------------------------------------------------------------------- #
+class BacktestAllRequest(BaseModel):
+    symbol: str
+    timeframe: str = "5m"
+    limit: int = 500
+    tp_pct: Optional[float] = None
+    sl_pct: Optional[float] = None
+    max_hold_hours: Optional[float] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+
+
+@app.post("/api/backtest/all")
+async def backtest_all(req: BacktestAllRequest):
+    start_ts = _parse_date(req.start_date)
+    end_ts = _parse_date(req.end_date)
+    if end_ts:
+        end_ts += 86_400_000 - 1
+
+    candles = await market.get_klines(req.symbol, req.timeframe, req.limit, start_ts, end_ts)
+    if not candles:
+        raise HTTPException(400, "Нет данных для бэктеста в заданном диапазоне")
+
+    # tp/sl применяются одинаково ко всем стратегиям
+    tp_pct = req.tp_pct if req.tp_pct is not None else settings.MIN_TP_PCT
+    sl_pct = req.sl_pct if req.sl_pct is not None else settings.DEFAULT_SL_PCT
+
+    results = []
+    for schema in STRATEGY_SCHEMAS():
+        strategy = build_strategy(schema["type"], tp_pct=req.tp_pct, sl_pct=req.sl_pct,
+                                  max_hold_hours=req.max_hold_hours)
+        try:
+            r = run_backtest(strategy, candles, req.timeframe, req.max_hold_hours)
+        except Exception:
+            continue
+        pf = r.profit_factor
+        results.append({
+            "type": schema["type"],
+            "name": schema["name"],
+            "trades": r.total_trades,
+            "win_rate": r.win_rate,
+            "pnl_pct": r.total_pnl_pct,
+            "profit_factor": pf,
+            "max_drawdown": r.max_drawdown_pct,
+            "avg_win_pct": r.avg_win_pct,
+            "avg_loss_pct": r.avg_loss_pct,
+            "avg_hold_hours": r.avg_hold_hours,
+            "end_1000": r.end_1000,
+            "return_pct": r.return_pct,
+        })
+
+    # Сортировка: сначала по win rate среди стратегий с >=3 сделками, затем по PnL
+    def _key(r):
+        trades_ok = 1 if r["trades"] >= 3 else 0
+        return (trades_ok, r["win_rate"], r["pnl_pct"])
+    results.sort(key=_key, reverse=True)
+
+    best = results[0] if results else None
+    return {
+        "symbol": req.symbol,
+        "timeframe": req.timeframe,
+        "candles": len(candles),
+        "tp_pct": tp_pct,
+        "sl_pct": sl_pct,
+        "start_date": req.start_date,
+        "end_date": req.end_date,
+        "best": best,
+        "results": results,
+    }
+
+
+# ---------------------------------------------------------------------- #
 # Оптимизация: прогон всех стратегий по символу, выбор лучших
 # ---------------------------------------------------------------------- #
 class OptimizeRequest(BaseModel):

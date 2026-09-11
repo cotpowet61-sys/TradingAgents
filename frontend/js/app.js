@@ -660,6 +660,79 @@ function renderTradesTable(trades) {
         <tbody>${rows}</tbody></table>`;
 }
 
+/* =========================================================================
+   БЭКТЕСТ ПО ВСЕМ СТРАТЕГИЯМ (сравнение в один клик)
+   ========================================================================= */
+async function runBacktestAll() {
+    const btn = document.getElementById('backtest-all-btn');
+    btn.disabled = true; btn.textContent = '⏳ Прогон 23 стратегий…';
+    try {
+        const payload = {
+            symbol: document.getElementById('bt-symbol').value,
+            timeframe: document.getElementById('bt-timeframe').value,
+            limit: parseInt(document.getElementById('bt-limit').value) || 500,
+            tp_pct: parseFloat(document.getElementById('bt-tp').value),
+            sl_pct: parseFloat(document.getElementById('bt-sl').value),
+            max_hold_hours: parseFloat(document.getElementById('bt-hold').value),
+            start_date: (document.getElementById('bt-start') || {}).value || null,
+            end_date: (document.getElementById('bt-end') || {}).value || null,
+        };
+        const data = await API.post('/api/backtest/all', payload);
+        renderBacktestAll(data);
+        log('system', `Бэктест всех стратегий для ${data.symbol}: лучшая → ${data.best ? data.best.name : '—'} (win rate ${data.best ? fmt(data.best.win_rate) : 0}%)`);
+    } catch (err) {
+        document.getElementById('backtest-results').innerHTML = `<div class="empty" style="color:var(--red)">${err.message}</div>`;
+    } finally {
+        btn.disabled = false; btn.textContent = '⚡ Все 23 стратегии';
+    }
+}
+
+function renderBacktestAll(d) {
+    const res = document.getElementById('backtest-results');
+    if (!d.results || !d.results.length) {
+        res.innerHTML = '<div class="empty">Нет результатов</div>';
+        return;
+    }
+    const best = d.best;
+    const rows = d.results.map((s, i) => {
+        const isBest = best && s.type === best.type;
+        return `
+        <tr style="${isBest ? 'background:rgba(52,211,153,.08)' : ''}">
+            <td>${isBest ? '🏆' : i + 1}</td>
+            <td>${s.name} ${isBest ? '<span class="pill long">лучшая</span>' : ''}</td>
+            <td class="${s.win_rate >= 55 ? 'up' : 'down'}">${fmt(s.win_rate)}%</td>
+            <td class="${s.pnl_pct >= 0 ? 'up' : 'down'}">${fmt(s.pnl_pct)}%</td>
+            <td>${s.trades}</td>
+            <td>${s.profit_factor === null ? '∞' : fmt(s.profit_factor)}</td>
+            <td>${fmt(s.max_drawdown)}%</td>
+            <td class="${s.end_1000 >= 1000 ? 'up' : 'down'}">$${fmt(s.end_1000, 0)}</td>
+            <td><button class="btn btn-ghost btn-sm" data-bt="${s.type}">Открыть</button></td>
+        </tr>`;
+    }).join('');
+
+    res.innerHTML = `
+        <div class="muted" style="margin-bottom:10px">${d.symbol} · ${d.timeframe} · TP ${d.tp_pct}% / SL ${d.sl_pct}% · ${d.candles} свечей${d.start_date ? ` · ${d.start_date} → ${d.end_date || 'сегодня'}` : ''}</div>
+        <div class="metrics-grid" style="margin-bottom:12px">
+            ${metric('Лучшая стратегия', best ? best.name : '—')}
+            ${metric('Win rate', best ? fmt(best.win_rate) + '%' : '—', best && best.win_rate >= 50)}
+            ${metric('$1000 → конец', best ? '$' + fmt(best.end_1000, 0) : '—', best && best.end_1000 >= 1000)}
+            ${metric('Стратегий всего', d.results.length)}
+        </div>
+        <div class="table-wrap">
+            <table class="data">
+                <thead><tr><th>#</th><th>Стратегия</th><th>Win rate</th><th>PnL</th><th>Сделок</th><th>PF</th><th>DD</th><th>$1000 →</th><th></th></tr></thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>`;
+
+    res.querySelectorAll('[data-bt]').forEach(b => {
+        b.addEventListener('click', () => {
+            document.getElementById('bt-strategy').value = b.dataset.bt;
+            toast(`Стратегия "${b.dataset.bt}" подставлена в форму. Нажмите «▶ Запустить бэктест» для деталей.`);
+        });
+    });
+}
+
 function redrawEquity() {
     if (lastBacktest) drawEquity(document.getElementById('equity-canvas'), lastBacktest.equity_curve || []);
 }
@@ -963,6 +1036,7 @@ function toast(msg) {
 /* ---------- Старт ---------- */
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('backtest-form').addEventListener('submit', runBacktest);
+    document.getElementById('backtest-all-btn').addEventListener('click', runBacktestAll);
     document.getElementById('strategy-form').addEventListener('submit', saveStrategy);
     document.getElementById('refresh-tickers').addEventListener('click', refreshTickers);
     document.getElementById('optimize-btn').addEventListener('click', runOptimize);
