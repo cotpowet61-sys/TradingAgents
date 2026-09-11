@@ -7,7 +7,7 @@ TradingAgents — мультиагентная платформа дэйтрей
   * Мультиагентный анализ (5 AI-ролей) и live-сигналы по WebSocket
   * Правила: <=30 сделок/день, TP>=2%, удержание<=4ч, лонг и шорт
 
-Запуск:  python main.py   (или uvicorn main:app --host 0.0.0.0 --port 3001)
+Запуск:  python main.py   (или uvicorn main:app --host 0.0.0.0 --port 3002)
 """
 from __future__ import annotations
 

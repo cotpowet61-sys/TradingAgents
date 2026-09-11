@@ -37,7 +37,7 @@ git clone https://github.com/cotpowet61-sys/TradingAgents.git
 * **Mac / Linux:** дважды кликните по файлу **`start.sh`**
 
 Всё остальное (установка библиотек, настройка) произойдёт **автоматически**.
-Через несколько секунд в браузере откроется сайт: **http://localhost:3001**
+Через несколько секунд в браузере откроется сайт: **http://localhost:3002**
 
 > Терминал/командная строка **не нужны** — просто двойной клик по `start.bat`.
 > Закрыли окно с сервером — сайт выключился. Запустите тем же файлом — включится.
@@ -157,8 +157,8 @@ git clone https://github.com/cotpowet61-sys/TradingAgents.git
 ## 🧰 Для тех, кто в коде разбирается
 
 * Backend: `backend/` (FastAPI). Запуск вручную: `cd backend && python main.py`
-* API-документация: `http://localhost:3001/docs`
-* Docker: `docker compose up --build` (фронт на `:8080`, API на `:3001`)
+* API-документация: `http://localhost:3002/docs`
+* Docker: `docker compose up --build` (фронт на `:8080`, API на `:3002`)
 * Структура и архитектура описаны в комментариях к каждому модулю.
 
 Добавить свою стратегию: создайте класс в `backend/strategies/builtin.py`

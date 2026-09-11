@@ -42,10 +42,10 @@ if not exist ".env" (
 REM 5) Открываем браузер и запускаем
 echo [3/3] Запускаю сервер...
 echo.
-echo   Открываю браузер: http://localhost:3001
+echo   Открываю браузер: http://localhost:3002
 echo   (закройте это окно, чтобы остановить)
 echo.
-start "" http://localhost:3001
+start "" http://localhost:3002
 
 cd backend
 python main.py

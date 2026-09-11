@@ -37,12 +37,12 @@ fi
 # 4) Запуск
 echo "[3/3] Запускаю сервер..."
 echo ""
-echo "  Открываю браузер: http://localhost:3001"
+echo "  Открываю браузер: http://localhost:3002"
 echo "  (нажмите Ctrl+C, чтобы остановить)"
 echo ""
 
 # пробуем открыть браузер
-( sleep 2; (open http://localhost:3001 2>/dev/null || xdg-open http://localhost:3001 2>/dev/null) ) &
+( sleep 2; (open http://localhost:3002 2>/dev/null || xdg-open http://localhost:3002 2>/dev/null) ) &
 
 cd backend
 python main.py
