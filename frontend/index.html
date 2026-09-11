@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TradingAgents - Matrix Interface</title>
+    <link rel="stylesheet" href="css/matrix-style.css">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="ticker-bar">
+            <span class="live-indicator">🔴 LIVE</span>
+            <span id="ticker-data">Loading market data...</span>
+            <span class="phi">φ = 1.618033988...</span>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <div class="container">
+        <!-- Left Panel: Hot Coins -->
+        <aside class="left-panel">
+            <h2>🔥 HOT COINS</h2>
+            <div class="filters">
+                <label><input type="checkbox" checked> Vol > $10M</label>
+                <label><input type="checkbox" checked> Change > 2%</label>
+            </div>
+            <div id="coins-list" class="coins-list">
+                <div class="coin-item">
+                    <div class="coin-name">LOADING...</div>
+                    <div class="coin-stats">Scanning market...</div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Center Panel: TradingView Chart -->
+        <main class="center-panel">
+            <div id="tradingview-chart"></div>
+        </main>
+
+        <!-- Right Panel: Agents Log -->
+        <aside class="right-panel">
+            <h2>🤖 AGENTS LOG</h2>
+            <div id="agents-log" class="agents-log"></div>
+        </aside>
+    </div>
+
+    <!-- Footer: Agents Status -->
+    <footer class="footer">
+        <div class="agents-status">
+            <div class="agent" data-agent="scanner">
+                <span class="agent-icon">⚡</span>
+                <span class="agent-name">Scanner</span>
+                <span class="agent-status">ACTIVE</span>
+            </div>
+            <div class="agent" data-agent="gpt6">
+                <span class="agent-icon">🧠</span>
+                <span class="agent-name">GPT-6</span>
+                <span class="agent-status">STANDBY</span>
+            </div>
+            <div class="agent" data-agent="grok">
+                <span class="agent-icon">🦅</span>
+                <span class="agent-name">Grok</span>
+                <span class="agent-status">STANDBY</span>
+            </div>
+            <div class="agent" data-agent="gemini">
+                <span class="agent-icon">💎</span>
+                <span class="agent-name">Gemini</span>
+                <span class="agent-status">STANDBY</span>
+            </div>
+            <div class="agent" data-agent="claude">
+                <span class="agent-icon">🛡️</span>
+                <span class="agent-name">Claude</span>
+                <span class="agent-status">MONITORING</span>
+            </div>
+        </div>
+    </footer>
+
+    <!-- TradingView Widget Script -->
+    <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

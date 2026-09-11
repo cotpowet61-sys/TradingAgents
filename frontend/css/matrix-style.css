@@ -1,0 +1,20 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Courier New', monospace; background: #0d0208; color: #00ff41; overflow: hidden; }
+.header { background: #1a0f14; padding: 10px; border-bottom: 2px solid #00ff41; }
+.ticker-bar { display: flex; justify-content: space-between; font-size: 14px; }
+.live-indicator { color: #ff0000; font-weight: bold; }
+.phi { color: #00ffff; }
+.container { display: flex; height: calc(100vh - 120px); }
+.left-panel, .right-panel { width: 300px; background: #0d0208; border: 1px solid #00ff41; padding: 15px; overflow-y: auto; }
+.center-panel { flex: 1; background: #000; position: relative; }
+#tradingview-chart { width: 100%; height: 100%; }
+.coin-item { background: #1a0f14; padding: 10px; margin: 10px 0; border-left: 3px solid #00ff41; cursor: pointer; }
+.coin-item:hover { background: #2a1f24; }
+.agents-log { font-size: 12px; line-height: 1.6; }
+.log-entry { margin: 8px 0; padding: 5px; background: #1a0f14; border-left: 2px solid #00ffff; }
+.footer { background: #1a0f14; padding: 15px; border-top: 2px solid #00ff41; }
+.agents-status { display: flex; justify-content: space-around; }
+.agent { text-align: center; }
+.agent-icon { font-size: 24px; display: block; }
+.agent-name { font-size: 12px; display: block; margin: 5px 0; }
+.agent-status { font-size: 10px; color: #00ffff; }
