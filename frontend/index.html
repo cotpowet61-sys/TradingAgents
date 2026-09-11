@@ -21,6 +21,7 @@
         <button class="nav-btn" data-tab="strategies">Стратегии</button>
         <button class="nav-btn" data-tab="backtest">Бэктест</button>
         <button class="nav-btn" data-tab="live">Live-сигналы</button>
+        <button class="nav-btn" data-tab="assistant">🧑‍💻 Ассистент</button>
         <button class="nav-btn" data-tab="settings">Настройки</button>
     </nav>
     <div class="status-group">
@@ -206,6 +207,63 @@
     <div class="card">
         <div class="card-head"><h2>Правила торговли</h2></div>
         <div class="card-body rules-grid" id="rules-grid"></div>
+    </div>
+</section>
+
+<!-- ============ ASSISTANT (кодовый агент) ============ -->
+<section class="panel" id="panel-assistant">
+    <div class="two-col">
+        <div class="card">
+            <div class="card-head"><h2>🧑‍💻 Кодовый ассистент</h2></div>
+            <div class="card-body">
+                <form id="assistant-form" class="form">
+                    <label>Что сделать?
+                        <textarea id="as-request" rows="4" placeholder="Например: добавь стратегию на пересечении EMA 5 и EMA 20 с фильтром RSI..."></textarea>
+                    </label>
+                    <label>Тип задачи
+                        <select id="as-task">
+                            <option value="strategy">Новая стратегия (Python)</option>
+                            <option value="ui">Правка интерфейса (HTML/CSS/JS)</option>
+                            <option value="general">Другое / вопрос по коду</option>
+                        </select>
+                    </label>
+                    <label>Какой моделью писать код?
+                        <select id="as-role"></select>
+                    </label>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary btn-wide">⚡ Сгенерировать код</button>
+                    </div>
+                </form>
+                <div class="muted" style="margin-top:14px;line-height:1.6">
+                    <b>Как это работает:</b> вы описываете, что нужно — выбранная модель пишет
+                    готовый код. Вы просматриваете его и сохраняете в файл проекта.
+                    Примеры: «добавь стратегию: лонг при пробое 20-барового максимума»,
+                    «поменяй цвет кнопок на зелёный», «добавь в бэктест метрику X».
+                </div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-head">
+                <h2>Результат</h2>
+                <div class="spacer"></div>
+                <span id="as-meta" class="muted"></span>
+            </div>
+            <div class="card-body">
+                <div id="as-output" class="empty">Здесь появится сгенерированный код</div>
+            </div>
+        </div>
+    </div>
+    <div class="card">
+        <div class="card-head"><h2>💾 Сохранить в файл проекта</h2></div>
+        <div class="card-body">
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--text-dim);flex:1">Путь файла
+                    <input type="text" id="as-filename" placeholder="backend/strategies/my_strategy.py" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border-2);border-radius:8px;padding:8px 10px;font-family:var(--mono)">
+                </label>
+                <button id="as-save" class="btn btn-primary" style="margin-top:18px">💾 Сохранить</button>
+            </div>
+            <p class="muted" style="margin-top:8px">Файл сохраняется в папку проекта (только .py/.js/.css/.html/.md). Для новой стратегии сохраните в <b>backend/strategies/</b> и зарегистрируйте класс в реестре.</p>
+        </div>
     </div>
 </section>
 

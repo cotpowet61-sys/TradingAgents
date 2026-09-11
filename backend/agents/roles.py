@@ -99,6 +99,7 @@ async def get_agent_verdict(role_key: str, snapshot: dict) -> dict:
         text = await client.chat(role_key, messages, json_mode=True, seed=hash(snapshot.get("symbol", "")))
         verdict = _parse_json(text)
     except Exception as e:
+        text = ""
         verdict = {
             "side": "NEUTRAL",
             "confidence": 0.0,
@@ -106,6 +107,14 @@ async def get_agent_verdict(role_key: str, snapshot: dict) -> dict:
             "risks": ["Ошибка API"],
             "key_levels": {"support": None, "resistance": None},
         }
+    # Оценка расхода токенов (≈ 4 символа = 1 токен; точное значение отдаёт
+    # провайдер, здесь приблизительная оценка для прозрачности затрат)
+    prompt_chars = sum(len(str(m.get("content", ""))) for m in messages)
+    verdict["tokens_est"] = {
+        "prompt": prompt_chars // 4,
+        "completion": len(text) // 4,
+        "total": (prompt_chars + len(text)) // 4,
+    }
     verdict.setdefault("side", "NEUTRAL")
     verdict.setdefault("confidence", 0.0)
     verdict.setdefault("reason", "")

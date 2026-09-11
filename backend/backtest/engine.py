@@ -60,6 +60,12 @@ class BacktestResult:
     trades: List[dict]
     started: int
     finished: int
+    # --- Капитал (для расчёта «было $X → стало $Y») ---
+    initial_capital: float
+    final_equity: float
+    return_pct: float
+    start_1000: float = 1000.0
+    end_1000: float = 0.0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -179,6 +185,11 @@ def run_backtest(strategy: Strategy, candles: List[Candle], timeframe: str,
     avg_loss = (sum(t.pnl_pct for t in losses) / len(losses)) if losses else 0.0
     avg_hold = (sum(t.hold_hours for t in trades) / total) if total else 0.0
 
+    # Итоговый капитал (сложный процент с учётом размера позиции)
+    final_equity = equity
+    return_pct = (final_equity / capital - 1) * 100 if capital else 0.0
+    end_1000 = 1000.0 * (final_equity / capital) if capital else 0.0
+
     # Sharpe (по сделкам, приблизительно)
     if len(pnl_pcts) > 1:
         mean = sum(pnl_pcts) / len(pnl_pcts)
@@ -203,4 +214,8 @@ def run_backtest(strategy: Strategy, candles: List[Candle], timeframe: str,
         trades=[t.to_dict() for t in trades],
         started=candles[0].ts if candles else 0,
         finished=candles[-1].ts if candles else 0,
+        initial_capital=round(capital, 2),
+        final_equity=round(final_equity, 2),
+        return_pct=round(return_pct, 2),
+        end_1000=round(end_1000, 2),
     )

@@ -309,6 +309,78 @@ async def test_models(role: Optional[str] = Query(default=None)):
 
 
 # ---------------------------------------------------------------------- #
+# Кодовый ассистент — агент, который пишет код для платформы
+# (новые стратегии, правки интерфейса и т.д.)
+# ---------------------------------------------------------------------- #
+CODE_SYSTEM = """Ты — кодовый ассистент для платформы TradingAgents (Python/FastAPI backend + vanilla JS frontend).
+
+Структура проекта:
+- backend/strategies/builtin.py — стратегии (классы, наследники Strategy, метод generate(candles, index) -> Signal)
+- backend/strategies/base.py — базовый класс Strategy и Signal (SignalSide.LONG/SHORT/NEUTRAL, метод self._build_signal(side, candles, index, confidence, reason))
+- backend/strategies/indicators.py — индикаторы (sma, ema, rsi, atr, macd, bollinger, stochastic, adx, supertrend, cci, williams_r, mfi, ichimoku, zscore, pivot_levels)
+- backend/strategies/registry.py — реестр (BUILTIN_STRATEGIES, build_strategy)
+- frontend/index.html, frontend/css/style.css, frontend/js/app.js — интерфейс
+
+ТВОЯ ЗАДАЧА: по запросу пользователя выдать ГОТОВЫЙ, рабочий код. Отвечай только кодом (или кодом + краткие инструкции), без лишних рассуждений. Если просят новую стратегию — верни полный класс Python. Если просят правку интерфейса — верни нужный фрагмент HTML/CSS/JS. Код должен быть самодостаточным и корректным."""
+
+
+class CodeRequest(BaseModel):
+    request: str
+    role: str = "strategist"  # какая из 5 моделей пишет код
+    task: str = "strategy"    # strategy | ui | general
+
+
+@app.post("/api/code/assist")
+async def code_assist(req: CodeRequest):
+    if req.role not in settings.ROLE_KEYS:
+        raise HTTPException(404, f"Неизвестная роль: {req.role}")
+    client = get_client()
+    user = (
+        f"Задача ({req.task}):\n{req.request}\n\n"
+        f"Дай только готовый код и, если нужно, 1-3 строки инструкции по подключению."
+    )
+    try:
+        text = await client.chat(req.role, [
+            {"role": "system", "content": CODE_SYSTEM},
+            {"role": "user", "content": user},
+        ], max_tokens=2500, temperature=0.2)
+    except Exception as e:
+        raise HTTPException(500, f"Ошибка модели: {e}")
+    return {
+        "code": text,
+        "role": req.role,
+        "model": settings.model_role(req.role)["model"],
+        "demo": settings.model_role(req.role)["api_key"] == "",
+        "tokens_est": {"prompt": len(CODE_SYSTEM + user) // 4, "completion": len(text) // 4},
+    }
+
+
+class CodeSaveRequest(BaseModel):
+    filename: str   # относительный путь внутри репозитория, например backend/strategies/my_strategy.py
+    content: str
+
+
+@app.post("/api/code/save")
+async def code_save(req: CodeSaveRequest):
+    """Сохраняет сгенерированный код в файл (только .py/.js/.css/.html внутри репозитория)."""
+    from config import PROJECT_ROOT
+    fn = req.filename.replace("\\", "/").lstrip("/")
+    # защита от выхода за пределы репозитория
+    target = os.path.normpath(os.path.join(PROJECT_ROOT, fn))
+    if not target.startswith(os.path.normpath(PROJECT_ROOT) + os.sep):
+        raise HTTPException(400, "Недопустимый путь (выход за пределы проекта)")
+    if not fn.endswith((".py", ".js", ".css", ".html", ".md")):
+        raise HTTPException(400, "Разрешены только файлы .py/.js/.css/.html/.md")
+    try:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(req.content)
+    except Exception as e:
+        raise HTTPException(500, f"Не удалось сохранить: {e}")
+    return {"ok": True, "path": fn}
+
+
+# ---------------------------------------------------------------------- #
 # Стриминг-анализ (SSE) — «ветки размышлений» агентов в реальном времени
 # ---------------------------------------------------------------------- #
 @app.get("/api/analyze/stream")

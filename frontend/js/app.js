@@ -43,6 +43,7 @@ async function init() {
     initChart();
     refreshTickers();
     initLive();
+    initAssistant();
 
     connectWS(onWsEvent, (s) => { state.live = s || {}; renderLive(); });
     setInterval(refreshTickers, 30000);
@@ -534,6 +535,7 @@ function onAgentVerdict(a) {
                     <div class="a-verdict" style="margin-top:4px">
                         <span class="pill ${a.side === 'LONG' ? 'long' : a.side === 'SHORT' ? 'short' : 'neutral'}">${a.side}</span>
                         <span>conf ${fmt(a.confidence * 100, 0)}%</span>
+                        ${a.tokens_est ? `<span class="muted" style="font-size:10px">≈${a.tokens_est.total} ток.</span>` : ''}
                     </div>
                     ${steps ? `<div class="t-steps">${steps}</div>` : ''}
                     ${a.reason ? `<div class="a-reason">${escapeHtml(a.reason).slice(0, 200)}</div>` : ''}
@@ -622,6 +624,12 @@ function renderBacktest(d) {
             ${metric('Ср. убыток', fmt(d.avg_loss_pct) + '%', false)}
             ${metric('Ср. удержание', fmt(d.avg_hold_hours, 2) + 'ч')}
             ${metric('Sharpe', fmt(d.sharpe, 2))}
+        </div>
+        <div class="metrics-grid" style="margin-top:10px">
+            ${metric('Старт $1000 → конец', '$' + fmt(d.end_1000, 0), d.end_1000 >= 1000)}
+            ${metric('Доходность периода', (d.return_pct >= 0 ? '+' : '') + fmt(d.return_pct) + '%', d.return_pct >= 0)}
+            ${metric('Начальный капитал', '$' + fmt(d.initial_capital, 0))}
+            ${metric('Конечный капитал', '$' + fmt(d.final_equity, 0), d.final_equity >= d.initial_capital)}
         </div>`;
     drawEquity(document.getElementById('equity-canvas'), d.equity_curve || []);
     drawCandlesWithTrades(document.getElementById('trades-canvas'), d.candles || [], d.trades || []);
@@ -823,6 +831,66 @@ function onWsEvent(data) {
 }
 
 /* =========================================================================
+   КОДОВЫЙ АССИСТЕНТ (агент, пишущий код)
+   ========================================================================= */
+function initAssistant() {
+    const roleSel = document.getElementById('as-role');
+    if (!roleSel) return;
+    roleSel.innerHTML = [
+        ['strategist', '🧠 gpt-6-astra (стратег)'],
+        ['momentum', '⚡ gpt-5.6-sol (моментум)'],
+        ['contrarian', '🦅 grok-4.5 (контрариан)'],
+        ['macro', '💎 gemini-2.5-pro (макро)'],
+        ['risk', '🛡️ claude-fable-5 (риск)'],
+    ].map(([k, n]) => `<option value="${k}">${n}</option>`).join('');
+
+    document.getElementById('assistant-form').addEventListener('submit', runAssistant);
+    document.getElementById('as-save').addEventListener('click', saveAssistantCode);
+}
+
+async function runAssistant(e) {
+    e.preventDefault();
+    const btn = e.target.querySelector('button[type=submit]');
+    const out = document.getElementById('as-output');
+    btn.disabled = true; btn.textContent = '⏳ Генерация…';
+    out.innerHTML = '<div class="empty"><span class="spinner"></span> Модель пишет код…</div>';
+    try {
+        const data = await API.post('/api/code/assist', {
+            request: document.getElementById('as-request').value.trim(),
+            task: document.getElementById('as-task').value,
+            role: document.getElementById('as-role').value,
+        });
+        lastCode = data.code || '';
+        document.getElementById('as-meta').textContent =
+            `${data.model}${data.demo ? ' · DEMO' : ''} · ≈${(data.tokens_est?.prompt || 0) + (data.tokens_est?.completion || 0)} токенов`;
+        // выводим код в pre
+        const pre = document.createElement('pre');
+        pre.style.cssText = 'white-space:pre-wrap;word-wrap:break-word;font-family:var(--mono);font-size:12px;line-height:1.5;color:var(--text);max-height:60vh;overflow:auto';
+        pre.textContent = data.code;
+        out.innerHTML = '';
+        out.appendChild(pre);
+        log('system', `Ассистент (${data.model}) сгенерировал код: ${data.code.length} символов`);
+    } catch (err) {
+        out.innerHTML = `<div class="empty" style="color:var(--red)">${err.message}</div>`;
+    } finally {
+        btn.disabled = false; btn.textContent = '⚡ Сгенерировать код';
+    }
+}
+
+async function saveAssistantCode() {
+    const fn = document.getElementById('as-filename').value.trim();
+    if (!fn) { toast('Укажите путь файла'); return; }
+    if (!lastCode) { toast('Сначала сгенерируйте код'); return; }
+    try {
+        const res = await API.post('/api/code/save', { filename: fn, content: lastCode });
+        toast(`✅ Сохранено: ${res.path}`);
+        log('system', `Код сохранён в ${res.path}`);
+    } catch (e) {
+        toast('❌ ' + e.message);
+    }
+}
+
+/* =========================================================================
    Журнал
    ========================================================================= */
 const MAX_LOG = 200;
@@ -877,6 +945,8 @@ function setAgentState(which, st) {
 }
 
 /* ---------- Toast ---------- */
+let lastCode = '';
+
 let toastEl = null;
 function toast(msg) {
     if (!toastEl) {
