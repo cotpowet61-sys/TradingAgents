@@ -28,42 +28,57 @@ BASES = [
     "https://api.bybit.eu",
 ]
 
-# Смещение локальных часов относительно сервера Bybit (частая причина
-# «invalid timestamp» / retCode 10002 — подпись умирает при рассинхроне >1с).
-_time_offset_ms: float = 0.0
-_time_synced_at: float = 0.0
+# Подпись по СЕРВЕРНОМУ времени Bybit (проверено автономным тестером
+# bybit_key_test.py на машине пользователя): локальным часам не доверяем
+# вообще — на ПК сдвиг 0.5–3.5 с убивал подпись ошибкой 10002 сначала
+# постоянно, а после ресинка — периодически (джиттер VPN). Механика:
+# берём /v5/market/time (публичный), кэшируем на _CLOCK_TTL_SEC секунд и
+# экстраполируем через time.monotonic() (не зависит от системных часов),
+# подписываем меткой «серверное время минус запас» — метка всегда строго
+# в прошлом относительно сервера, поэтому 10002 исключён по построению.
+_srv_base_ms: float = 0.0   # серверная метка, снятая в момент калибровки
+_srv_mono: float = 0.0      # time.monotonic() в тот же момент
+_CLOCK_TTL_SEC: float = 4.0
+_SIGN_MARGIN_MS: float = 1000.0
 
 
-async def _sync_time(force: bool = False) -> None:
-    global _time_offset_ms, _time_synced_at
-    now = time.time()
-    if not force and now - _time_synced_at < 300:
-        return
-    local_ms = now * 1000
+def _bases_ordered() -> List[str]:
+    return ([settings.BYBIT_BASE_URL] if settings.BYBIT_BASE_URL else []) + \
+        [b for b in BASES if b != settings.BYBIT_BASE_URL]
+
+
+async def _server_now_ms(force: bool = False) -> float:
+    """Текущее серверное время Bybit (мс). Кэш 4 с, дальше — свежий запрос."""
+    global _srv_base_ms, _srv_mono
+    now = time.monotonic()
+    if not force and _srv_base_ms and (now - _srv_mono) < _CLOCK_TTL_SEC:
+        return _srv_base_ms + (now - _srv_mono) * 1000
     async with httpx.AsyncClient(timeout=10) as cli:
-        for base in BASES:
+        for base in _bases_ordered():
             try:
-                r = await cli.get(base + "/v5/market/time")
-                data = r.json()
+                r = await cli.get(base.rstrip("/") + "/v5/market/time")
+                res = (r.json().get("result") or {})
                 srv = None
-                res = data.get("result") or {}
                 if res.get("timeNano"):
                     srv = int(res["timeNano"]) / 1_000_000
                 elif res.get("timeSecond"):
                     srv = float(res["timeSecond"]) * 1000
                 if srv:
-                    _time_offset_ms = srv - local_ms
-                    _time_synced_at = now
-                    return
+                    _srv_base_ms = srv
+                    _srv_mono = time.monotonic()
+                    return srv
             except Exception:
                 continue
-    # сервер недоступен — подписываем локальным временем (ошибка всплывёт как retCode)
-    _time_offset_ms = 0.0
-    _time_synced_at = now
+    # Все хосты недоступны — подписываем локальным временем (10002 всплывёт честно)
+    _srv_base_ms = 0.0
+    return time.time() * 1000
 
 
 def server_time_ms() -> int:
-    return int(time.time() * 1000 + _time_offset_ms)
+    """Последняя известная серверная метка (для диагностики/отображения)."""
+    if _srv_base_ms:
+        return int(_srv_base_ms + (time.monotonic() - _srv_mono) * 1000)
+    return int(time.time() * 1000)
 
 
 def _sign(ts: int, recv: int, payload: str) -> str:
@@ -77,59 +92,56 @@ async def _get(path: str, params: dict) -> dict:
     # убираем пустые
     params = {k: v for k, v in params.items() if v is not None and v != ""}
     query = "&".join(f"{k}={v}" for k, v in sorted((k, str(v)) for k, v in params.items()))
-
-    await _sync_time()
-    ts = server_time_ms()
     recv = 20000
-    headers = {
-        "X-BAPI-API-KEY": settings.BYBIT_API_KEY,
-        "X-BAPI-SIGN": _sign(ts, recv, query),
-        "X-BAPI-TIMESTAMP": str(ts),
-        "X-BAPI-RECV-WINDOW": str(recv),
-    }
 
     last_err: Optional[Exception] = None
     tried: List[str] = []
-    bases = ([settings.BYBIT_BASE_URL] if settings.BYBIT_BASE_URL else []) + [b for b in BASES if b != settings.BYBIT_BASE_URL]
     async with httpx.AsyncClient(timeout=20) as cli:
-        for base in bases:
+        for base in _bases_ordered():
             host = base.replace("https://", "")
             tried.append(host)
-            try:
-                r = await cli.get(base.rstrip("/") + path + ("?" + query if query else ""), headers=headers)
-                data = r.json()
-                if data.get("retCode") == 0:
-                    return data.get("result") or {}
-                rc = data.get("retCode")
-                msg = data.get("retMsg") or ""
-                # ошибка ключа/прав — повторять на другом хосте бессмысленно
-                if rc in (10003, 10004, 10005, 33004):
-                    hint = {
-                        10003: "неверный API-ключ",
-                        10004: "ошибка подписи (проверьте secret)",
-                        10005: "у ключа нет нужных прав — включите на Bybit доступ к контрактам (Read-Only с 'Contracts') либо Unified Trading",
-                        33004: "срок ключа истёк или отозван",
-                    }.get(rc, "")
-                    raise BybitAuthError(f"Bybit отклонил ключ: {msg} (код {rc}). {hint}")
-                # рассинхрон времени — ресинхронизируемся один раз и повторим
-                if rc == 10002:
-                    await _sync_time(force=True)
-                    ts2 = server_time_ms()
-                    headers["X-BAPI-TIMESTAMP"] = str(ts2)
-                    headers["X-BAPI-SIGN"] = _sign(ts2, recv, query)
+            for retry in (0, 1):  # retry=1 — только после 10002 с принудительной калибровкой
+                try:
+                    # СВЕЖАЯ серверная метка на каждую попытку: локальные часы
+                    # не участвуют в подписи → 10002 исключён по построению.
+                    ts = int(await _server_now_ms(force=retry > 0) - _SIGN_MARGIN_MS)
+                    headers = {
+                        "X-BAPI-API-KEY": settings.BYBIT_API_KEY,
+                        "X-BAPI-SIGN": _sign(ts, recv, query),
+                        "X-BAPI-TIMESTAMP": str(ts),
+                        "X-BAPI-RECV-WINDOW": str(recv),
+                    }
                     r = await cli.get(base.rstrip("/") + path + ("?" + query if query else ""), headers=headers)
                     data = r.json()
                     if data.get("retCode") == 0:
                         return data.get("result") or {}
-                    raise BybitAuthError(f"Bybit: {data.get('retMsg')} (код {data.get('retCode')})")
-                # Любая другая логическая ошибка API одинакова на всех хостах —
-                # сразу показываем её как есть (это НЕ сеть).
-                raise BybitAuthError(f"Bybit API: {msg} (код {rc})")
-            except BybitAuthError:
-                raise
-            except Exception as e:
-                last_err = e
-                continue
+                    rc = data.get("retCode")
+                    msg = data.get("retMsg") or ""
+                    # ошибка ключа/прав — повторять бессмысленно
+                    if rc in (10003, 10004, 10005, 33004):
+                        hint = {
+                            10003: "неверный API-ключ",
+                            10004: "ошибка подписи (проверьте secret)",
+                            10005: "у ключа нет нужных прав — включите на Bybit доступ к контрактам (Read-Only с 'Contracts') либо Unified Trading",
+                            33004: "срок ключа истёк или отозван",
+                        }.get(rc, "")
+                        raise BybitAuthError(f"Bybit отклонил ключ: {msg} (код {rc}). {hint}")
+                    if rc == 10002 and retry == 0:
+                        continue  # перекалибруемся по серверному времени и повторим один раз
+                    if rc == 110088:
+                        raise BybitAuthError(
+                            "Bybit требует апгрейд аккаунта до UTA 2.0 для этого эндпоинта "
+                            "(код 110088). На чтение истории closed-pnl это не влияет; "
+                            "апгрейд: приложение Bybit → Профиль → Upgrade to UTA 2.0."
+                        )
+                    # Любая другая логическая ошибка API одинакова на всех хостах —
+                    # сразу показываем её как есть (это НЕ сеть).
+                    raise BybitAuthError(f"Bybit API: {msg} (код {rc})")
+                except BybitAuthError:
+                    raise
+                except Exception as e:
+                    last_err = e
+                    break  # сетевая ошибка → следующий хост
     raise BybitAuthError(
         f"Все хосты Bybit недоступны ({', '.join(tried)}). "
         f"Последняя ошибка: {last_err}. Похоже на блокировку сети/гео — попробуйте VPN "
@@ -199,11 +211,10 @@ async def diagnose() -> dict:
 
     out = {"hosts": hosts, "network_ok": any(h["ok"] for h in hosts), "key_check": None}
     if any(h["ok"] for h in hosts):
-        await _sync_time(force=True)
-        out["time_offset_ms"] = round(_time_offset_ms)
+        srv = await _server_now_ms(force=True)
+        out["time_offset_ms"] = round(srv - time.time() * 1000)
     if settings.has_bybit_keys() and out["network_ok"]:
-        await _sync_time(force=True)
-        ts = server_time_ms()
+        ts = int(await _server_now_ms() - _SIGN_MARGIN_MS)
         recv = 20000
         query = "category=linear&limit=1"
         headers = {
@@ -244,7 +255,9 @@ async def diagnose() -> dict:
         elif rc in (10003, 10004):
             tips.append("Ключ или secret неверны — скопируйте заново без пробелов.")
         elif rc == 10002:
-            tips.append("Код 10002: рассинхрон времени — попробуйте ещё раз (синхронизация уже поправлена автоматически).")
+            tips.append("Код 10002: сервер отверг метку времени — повторите (подпись идёт по серверному времени, пришлите вывод bybit_key_test.py, если повторяется).")
+        elif rc == 110088:
+            tips.append("Код 110088: Bybit просит апгрейд до UTA 2.0 (Профиль → Upgrade to UTA 2.0). История closed-pnl читается и без апгрейда.")
         elif "не введены" in (kc.get("detail") or ""):
             tips.append("Введите read-only ключи и сохраните.")
     out["tips"] = tips

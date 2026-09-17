@@ -285,6 +285,7 @@ def step_wallet(host, key, secret):
         10004: "Подпись не сошлась — почти наверняка перепутан/обрезан SECRET. Скопируй заново целиком.",
         10005: "У ключа нет нужного разрешения — нужен как минимум Read-only на Unified Trading.",
         10010: "IP не в белом списке ключа — либо убери привязку по IP, либо добавь текущий.",
+        110088: "Аккаунт UTA 1.0: этот эндпоинт требует UTA 2.0. На историю сделок не влияет.",
         10002: "Метка времени отвергнута — НЕ ДОЛЖНО появляться в этом тесте; если появилось — пришли вывод мне.",
     }.get(code, "Смотри текст ошибки выше.")
     info(f"расшифровка: {hint}")
@@ -293,19 +294,27 @@ def step_wallet(host, key, secret):
 
 def step_positions(host, key, secret):
     head("ШАГ 3. Открытые позиции (position/list, linear)")
-    resp = signed_get(host, "/v5/position/list",
-                      {"category": "linear", "settleCoin": "USDT"}, key, secret)
-    code, msg = retcode_of(resp)
-    if resp["err"]:
-        fail(f"сеть: {resp['err']}");  return
-    if code != 0:
-        fail(f"retCode {code}: {msg}");  return
-    rows = (resp["data"].get("result") or {}).get("list", [])
-    live = [r for r in rows if float(r.get("size") or 0) > 0]
-    ok(f"позиций с объёмом: {len(live)}")
-    for r in live[:8]:
-        info(f"  {r.get('symbol')} {r.get('side')} size={r.get('size')} "
-             f"entry={r.get('avgPrice')} uPnL={r.get('unrealisedPnl')}")
+    for params in ({"category": "linear", "settleCoin": "USDT"}, {"category": "linear"}):
+        resp = signed_get(host, "/v5/position/list", params, key, secret)
+        code, msg = retcode_of(resp)
+        if resp["err"]:
+            fail(f"сеть: {resp['err']}");  return
+        if code == 110088 and "settleCoin" in params:
+            continue  # пробуем без settleCoin
+        if code == 110088:
+            info("retCode 110088: аккаунт UTA 1.0 — Bybit закрыл чтение позиций до апгрейда до UTA 2.0.")
+            info("Это НЕ ошибка ключа и НЕ ошибка подписи. История сделок (шаг 4) работает без апгрейда.")
+            info("Захочешь позиции: приложение Bybit → Профиль → Upgrade to UTA 2.0.")
+            return
+        if code != 0:
+            fail(f"retCode {code}: {msg}");  return
+        rows = (resp["data"].get("result") or {}).get("list", [])
+        live = [r for r in rows if float(r.get("size") or 0) > 0]
+        ok(f"позиций с объёмом: {len(live)}")
+        for r in live[:8]:
+            info(f"  {r.get('symbol')} {r.get('side')} size={r.get('size')} "
+                 f"entry={r.get('avgPrice')} uPnL={r.get('unrealisedPnl')}")
+        return
 
 
 def step_history(host, key, secret, days):
@@ -345,6 +354,8 @@ def step_history(host, key, secret, days):
     ok(f"исполнений (executions): {total_exec} | закрытых позиций (closed-pnl): {total_pnl}")
     if first_ts:
         info(f"  период первой..последней сделки: {utc_str(first_ts)[:16]} → {utc_str(last_ts)[:16]}")
+    elif total_pnl > 0:
+        info("  executions пуст, но closed-pnl есть — для аналитики (ДНК трейдера) этого достаточно.")
     elif days >= 7:
         info("  сделок в периоде нет — либо их правда не было, либо ключ читает другой аккаунт.")
 
