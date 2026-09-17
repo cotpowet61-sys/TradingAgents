@@ -33,10 +33,10 @@ if not exist ".env" (
 
 echo [3/3] Starting server...
 echo.
-echo   Opening browser: http://localhost:3002
+echo   Opening browser: http://localhost:3003
 echo   Close this window to stop the server.
 echo.
-start "TradingAgents" http://localhost:3002
+start "TradingAgents" http://localhost:3003
 
 cd backend
 python main.py
