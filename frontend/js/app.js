@@ -530,7 +530,8 @@ async function loadCanvasCandles() {
             toast(data.hint);
         } else {
             drawCandles(canvas, data.candles || [],
-                { symbol: state.currentSymbol, interval: state.currentTF });
+                { symbol: state.currentSymbol + (data.market_category === 'linear' ? ' · PERP' : ''),
+                  interval: state.currentTF });
         }
         const src = document.getElementById('chart-data-src');
         if (src) {
@@ -1103,13 +1104,16 @@ function renderCoinList() {
         const cls = t.change24h >= 0 ? 'up' : 'down';
         const sign = t.change24h >= 0 ? '+' : '';
         const noData = !t.last;
+        const mk = t.market === 'linear'
+            ? ' <span class="badge data-src" style="font-size:8px;padding:0 4px;background:rgba(108,140,255,.12);color:var(--accent);border-color:rgba(108,140,255,.3)">PERP</span>'
+            : '';
         return `
             <div class="coin-item ${t.symbol === state.coin.symbol ? 'selected' : ''}" data-symbol="${t.symbol}">
                 <div>
-                    <div class="coin-name">${t.symbol}${noData ? ' <span class="badge data-src warn" style="font-size:8px;padding:0 4px">нет на Bybit</span>' : ''}</div>
+                    <div class="coin-name">${t.symbol}${mk}${noData ? ' <span class="badge data-src warn" style="font-size:8px;padding:0 4px">нет на Bybit</span>' : ''}</div>
                     <div class="coin-change ${cls}">${sign}${fmt(t.change24h)}%</div>
                 </div>
-                <div class="coin-last">${noData ? 'делистинг' : fmtPrice(t.last)}</div>
+                <div class="coin-last">${noData ? '—' : fmtPrice(t.last)}</div>
             </div>`;
     }).join('');
     box.querySelectorAll('.coin-item').forEach(el => {
@@ -1135,7 +1139,8 @@ async function loadCoinChart() {
             _drawChartNotice(canvas, '⛔ ' + data.hint);
         } else {
             drawCandles(canvas, data.candles || [],
-                { symbol: state.coin.symbol, interval: state.coin.tf });
+                { symbol: state.coin.symbol + (data.market_category === 'linear' ? ' · PERP' : ''),
+                  interval: state.coin.tf });
         }
     } catch (e) {}
 }

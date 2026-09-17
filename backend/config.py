@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     BYBIT_API_SECRET: str = ""
     BYBIT_TESTNET: bool = False
     BYBIT_BASE_URL: str = "https://api.bybit.com"
+    # Откуда брать рыночные данные: "linear" = бессрочные USDT-фьючерсы
+    # (там торгуется LSKUSDT и большинство ликвидных монет),
+    # "spot" = спотовый рынок. Если у монеты нет выбранной категории,
+    # платформа автоматически пробует другую.
+    MARKET_CATEGORY: str = "linear"
 
     # ------------------------------------------------------------------ #
     # 3) AI-модели (5 ролей). Все идут через один OpenAI-совместимый
@@ -188,6 +193,8 @@ class Settings(BaseSettings):
         "bybit_api_key": ("BYBIT_API_KEY", "BYBIT_API_KEY"),
         "bybit_api_secret": ("BYBIT_API_SECRET", "BYBIT_API_SECRET"),
         "bybit_testnet": ("BYBIT_TESTNET", "BYBIT_TESTNET"),
+        "bybit_base_url": ("BYBIT_BASE_URL", "BYBIT_BASE_URL"),
+        "market_category": ("MARKET_CATEGORY", "MARKET_CATEGORY"),
         "strategist_model": ("STRATEGIST_MODEL", "STRATEGIST_MODEL"),
         "strategist_api_key": ("STRATEGIST_API_KEY", "STRATEGIST_API_KEY"),
         "momentum_model": ("MOMENTUM_MODEL", "MOMENTUM_MODEL"),

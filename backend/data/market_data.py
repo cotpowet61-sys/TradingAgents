@@ -50,6 +50,18 @@ _STATUS = {
     "checked_at": 0.0,        # unix ts последнего живого ответа
 }
 
+# Известная категория символа Bybit: "spot" | "linear" (перпетуал) | ("none", ts)
+_SYMBOL_CATEGORY: dict = {}
+_NONE_TTL = 300.0             # как долго помним отсутствие символа
+
+
+def symbol_category(symbol: str) -> str:
+    """Известная категория символа: spot | linear | (настройка по умолчанию)."""
+    v = _SYMBOL_CATEGORY.get(symbol.upper())
+    if isinstance(v, str):
+        return v
+    return settings.MARKET_CATEGORY if settings.MARKET_CATEGORY in ("spot", "linear") else "linear"
+
 
 def _bybit_interval(interval: str) -> Optional[str]:
     """"5m" -> "5", "1h" -> "60". Возвращает None, если формат неизвестен."""
@@ -191,7 +203,8 @@ class MarketData:
             ok = False
             try:
                 resp = await http.get(host + "/v5/market/kline",
-                                      params={"category": "spot", "symbol": "BTCUSDT",
+                                      params={"category": settings.MARKET_CATEGORY if settings.MARKET_CATEGORY in ("spot", "linear") else "linear",
+                                              "symbol": "BTCUSDT",
                                               "interval": "5", "limit": 1})
                 if resp.status_code != 200:
                     detail = f"HTTP {resp.status_code}"
@@ -244,6 +257,33 @@ class MarketData:
         self._cache[(symbol, interval)] = (time.time(), candles)
 
     # ------------------------------------------------------------------ #
+    # Категория символа: spot (по умолчанию) или linear (перпетуалы).
+    # Авто-определение: спрашиваем spot; если пусто — пробуем linear.
+    # ------------------------------------------------------------------ #
+    async def _probe_category(self, symbol: str) -> Optional[str]:
+        """Категория Bybit для символа: "spot"/"linear" — данные есть;
+        "none" — API отвечает, но данных нет нигде; None — API недоступен.
+        Порядок проб: MARKET_CATEGORY (по умолчанию linear), затем запасная."""
+        known = _SYMBOL_CATEGORY.get(symbol.upper())
+        if isinstance(known, str):
+            return known
+        if isinstance(known, tuple) and (time.time() - known[1]) < _NONE_TTL:
+            return "none"  # недавно выяснили, что данных нет вообще
+
+        primary = settings.MARKET_CATEGORY if settings.MARKET_CATEGORY in ("spot", "linear") else "linear"
+        order = [primary] + (["spot"] if primary == "linear" else ["linear"])
+        for cat in order:
+            data = await self._get_json("/v5/market/kline", {
+                "category": cat, "symbol": symbol, "interval": "5", "limit": 1})
+            if data is None:
+                return None   # сеть/API недоступны — caller получит None (синтетика)
+            if data.get("result", {}).get("list"):
+                _SYMBOL_CATEGORY[symbol.upper()] = cat
+                return cat
+        _SYMBOL_CATEGORY[symbol.upper()] = ("none", time.time())
+        return "none"
+
+    # ------------------------------------------------------------------ #
     # Klines (OHLCV)
     # ------------------------------------------------------------------ #
     async def get_klines(self, symbol: str, interval: str = None, limit: int = None,
@@ -288,14 +328,20 @@ class MarketData:
         _mark_synthetic()
         return synthetic_klines_range(symbol, interval, start, end)
 
-    async def _fetch_klines_live(self, symbol: str, interval: str, limit: int) -> Optional[List[Candle]]:
+    async def _fetch_klines_live(self, symbol: str, interval: str, limit: int,
+                                 category: Optional[str] = None) -> Optional[List[Candle]]:
         """None = API недоступен (fallback в синтетику).
-        []    = API ответил, но данных нет (монета исключена с Bybit — не подделываем)."""
+        []    = API ответил, но данных нет ни на споте, ни на перпетуалах."""
         bint = _bybit_interval(interval)
         if bint is None:
             return None
+        cat = category or await self._probe_category(symbol)
+        if cat is None:
+            return None          # сеть/API недоступен
+        if cat == "none":
+            return []            # символа нет на Bybit
         data = await self._get_json("/v5/market/kline", {
-            "category": "spot", "symbol": symbol, "interval": bint,
+            "category": cat, "symbol": symbol, "interval": bint,
             "limit": min(limit, 1000)})
         if not data:
             return None
@@ -312,12 +358,17 @@ class MarketData:
         bint = _bybit_interval(interval)
         if bint is None:
             return None
+        cat = await self._probe_category(symbol)
+        if cat is None:
+            return None          # API недоступен → caller возьмёт синтетику
+        if cat == "none":
+            return []            # символа нет на Bybit
         rows_all: List[list] = []
         cursor = end
         got_answer = False
         for _ in range(12):  # до 12 страниц ≈ 12000 свечей
             data = await self._get_json("/v5/market/kline", {
-                "category": "spot", "symbol": symbol, "interval": bint,
+                "category": cat, "symbol": symbol, "interval": bint,
                 "start": start, "end": cursor, "limit": _PAGE_LIMIT})
             if not data:
                 return None
@@ -350,6 +401,10 @@ class MarketData:
     # ------------------------------------------------------------------ #
     # Тикеры
     # ------------------------------------------------------------------ #
+    def _ticker_category(self) -> str:
+        """Категория тикеров: по умолчанию linear (фьючерсы — как просил пользователь)."""
+        return settings.MARKET_CATEGORY if settings.MARKET_CATEGORY in ("spot", "linear") else "linear"
+
     async def get_tickers(self, symbols: List[str] = None) -> List[dict]:
         symbols = symbols or settings.symbols
         live = await self._fetch_tickers_live(symbols)
@@ -359,7 +414,7 @@ class MarketData:
         return synthetic_tickers(symbols)
 
     async def _fetch_tickers_live(self, symbols: List[str]) -> Optional[List[dict]]:
-        data = await self._get_json("/v5/market/tickers", {"category": "spot"})
+        data = await self._get_json("/v5/market/tickers", {"category": self._ticker_category()})
         if not data:
             return None
         rows = data.get("result", {}).get("list", [])
@@ -369,7 +424,9 @@ class MarketData:
             sym = r.get("symbol")
             if sym not in wanted:
                 continue
-            out.append(_ticker_dict(r))
+            d = _ticker_dict(r)
+            d["market"] = self._ticker_category()
+            out.append(d)
         return out if out else None
 
     # Все spot-монеты с фильтром по суточному объёму
@@ -389,13 +446,15 @@ class MarketData:
         return [t for t in synthetic if t["volume24h"] >= min_vol]
 
     async def _fetch_all_tickers_live(self) -> Optional[List[dict]]:
-        data = await self._get_json("/v5/market/tickers", {"category": "spot"})
+        data = await self._get_json("/v5/market/tickers", {"category": self._ticker_category()})
         if not data:
             return None
         rows = data.get("result", {}).get("list", [])
         out = []
         for r in rows:
-            out.append(_ticker_dict(r))
+            d = _ticker_dict(r)
+            d["market"] = self._ticker_category()
+            out.append(d)
         out.sort(key=lambda x: -x["volume24h"])
         return out if out else None
 

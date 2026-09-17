@@ -27,7 +27,7 @@ from typing import Optional, List
 import uvicorn
 
 from config import settings, ENV_PATH, ENV_EXAMPLE_PATH
-from data.market_data import MarketData, data_status
+from data.market_data import MarketData, data_status, symbol_category
 from strategies.registry import build_strategy, STRATEGY_SCHEMAS
 from strategies.selector import get_selector
 from backtest.engine import run_backtest
@@ -135,8 +135,10 @@ async def klines(symbol: str, interval: str = Query(default=None), limit: int = 
     empty = not candles
     return {"symbol": symbol, "interval": interval or settings.DEFAULT_TIMEFRAME,
             "data_source": src["source"],
+            "market_category": symbol_category(symbol),
             "empty": empty,
-            "hint": (f"На Bybit нет данных по {symbol} — вероятно, пара снята с торгов (делистинг)."
+            "hint": (f"На Bybit нет данных по {symbol} ни в споте, ни во фьючерсах — "
+                     f"пара, вероятно, снята с торгов."
                      if empty and src["bybit_ok"] else None),
             "candles": [c.to_dict() for c in candles]}
 
@@ -201,8 +203,8 @@ def _date_range(start_date: Optional[str], end_date: Optional[str]) -> tuple:
 
 def _no_data_msg(symbol: str) -> str:
     if data_status()["bybit_ok"]:
-        return (f"На Bybit нет данных по {symbol}: пара не торгуется "
-                f"(делистинг) или нет истории. Выберите другую монету.")
+        return (f"На Bybit нет данных по {symbol} ни в споте, ни во фьючерсах: "
+                f"пара не торгуется или нет истории. Выберите другую монету.")
     return "Нет данных для бэктеста в заданном диапазоне"
 
 
