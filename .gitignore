@@ -31,3 +31,8 @@ Thumbs.db
 # Логи
 *.log
 image-search/
+
+# TradeVision Portal
+portal/.env
+portal/data/
+.venv-portal/

@@ -1,0 +1,293 @@
+"""
+TradeVision Portal — сервер (порт 3005, независим от основной платформы).
+
+Запуск:  python portal/server.py
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import sys
+from typing import Optional
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Body
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+PORTAL_DIR = os.path.dirname(os.path.abspath(__file__))
+if PORTAL_DIR not in sys.path:
+    sys.path.insert(0, PORTAL_DIR)
+
+from portal_config import settings, ensure_env_file, ENV_PATH          # noqa: E402
+from council import (build_snapshot, get_verdict, view, consensus,     # noqa: E402
+                     get_market, COUNCIL_ROLES, role_meta)              # noqa: E402
+from llm_client import list_models, test_role, chat, LLMError          # noqa: E402
+import trades_analytics as ta_mod                                      # noqa: E402
+from bybit_account import BybitAuthError                               # noqa: E402
+from live_engine import get_engine                                     # noqa: E402
+
+STATIC_DIR = os.path.join(PORTAL_DIR, "static")
+
+app = FastAPI(title="TradeVision Portal", version="1.0")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.on_event("startup")
+async def _startup():
+    ensure_env_file()
+    os.makedirs(os.path.join(PORTAL_DIR, "data"), exist_ok=True)
+    get_engine().start()
+    print(f"[portal] TradeVision запущен → http://localhost:{settings.PORTAL_PORT}")
+
+
+@app.on_event("shutdown")
+async def _shutdown():
+    await get_engine().stop()
+
+
+# ---------------------------------------------------------------------- #
+# Страница
+# ---------------------------------------------------------------------- #
+@app.get("/")
+async def index():
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+
+@app.get("/api/health")
+async def health():
+    return {
+        "ok": True,
+        "demo_mode": settings.is_demo(),
+        "bybit_keys": settings.has_bybit_keys(),
+        "live": get_engine().state(),
+    }
+
+
+# ---------------------------------------------------------------------- #
+# Данные рынка Bybit (публичные, без ключей)
+# ---------------------------------------------------------------------- #
+@app.get("/api/klines/{symbol}")
+async def klines(symbol: str, interval: str = "5m", limit: int = 300):
+    market = get_market()
+    candles = await market.get_klines(symbol.upper(), interval, limit)
+    from data.market_data import data_status
+    st = data_status()
+    rows = [{
+        "time": int(c.ts / 1000),
+        "open": c.open, "high": c.high, "low": c.low, "close": c.close, "volume": c.volume,
+    } for c in candles]
+    return {
+        "symbol": symbol.upper(), "interval": interval,
+        "data_source": st.get("source"), "candles": rows,
+        "empty": not bool(rows),
+    }
+
+
+@app.get("/api/tickers")
+async def tickers(symbols: str = Query("")):
+    market = get_market()
+    syms = [s.strip().upper() for s in symbols.split(",") if s.strip()] or settings.watchlist
+    rows = await market.get_tickers(syms)
+    return {"tickers": rows}
+
+
+@app.get("/api/market/status")
+async def market_status():
+    from data.market_data import data_status
+    return data_status()
+
+
+@app.post("/api/market/ping")
+async def market_ping():
+    market = get_market()
+    return await market.ping()
+
+
+@app.get("/api/symbols")
+async def all_symbols():
+    """Все монеты Bybit (для добавления в watchlist)."""
+    market = get_market()
+    rows = await market.get_all_tickers()
+    return {"symbols": sorted([r["symbol"] for r in rows])}
+
+
+# ---------------------------------------------------------------------- #
+# Совет агентов (SSE-стрим)
+# ---------------------------------------------------------------------- #
+@app.get("/api/analyze/stream")
+async def analyze_stream(symbol: str, timeframe: str = None):
+    timeframe = timeframe or settings.DEFAULT_TIMEFRAME
+    symbol = symbol.upper()
+
+    async def gen():
+        try:
+            snap = await build_snapshot(symbol, timeframe)
+            candles = snap.pop("candles", None)
+            yield _ev("snapshot", {
+                "symbol": symbol, "timeframe": timeframe,
+                "price": snap.get("price"),
+                "features": snap.get("features"),
+                "strategy": {"name": snap.get("strategy"), "type": None},
+                "strategy_auto": snap.get("strategy_auto"),
+                "strategy_signal": snap.get("strategy_signal_obj"),
+                "candles": len(candles) if candles else 0,
+            })
+
+            tasks = {asyncio.create_task(get_verdict(k, snap)): k for k in COUNCIL_ROLES}
+            verdicts = {}
+            pending = set(tasks.keys())
+            while pending:
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                for fut in done:
+                    k = tasks[fut]
+                    try:
+                        v = fut.result()
+                    except Exception as e:
+                        v = {"side": "NEUTRAL", "confidence": 0.0, "reason": f"Ошибка: {e}",
+                             "thinking": [], "risks": [], "error": True}
+                    verdicts[k] = v
+                    yield _ev("agent", view(k, v))
+
+            cons = consensus(verdicts, snap.get("strategy_signal_obj"))
+            yield _ev("consensus", {"consensus": cons})
+            yield _ev("done", {})
+        except Exception as e:
+            yield _ev("error", {"message": str(e)[:300]})
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+def _ev(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+# ---------------------------------------------------------------------- #
+# Мои сделки
+# ---------------------------------------------------------------------- #
+@app.get("/api/portfolio/overview")
+async def portfolio_overview(days: int = 90):
+    try:
+        data = await ta_mod.load_trades(days=days)
+    except BybitAuthError as e:
+        raise HTTPException(400, str(e))
+    stats = ta_mod.compute_stats(data["trades"], days=days)
+    return {
+        "source": data["source"],
+        "stats": stats,
+        "recent": ta_mod.recent_brief(data["trades"], 25),
+        "agents_enabled": settings.role_enabled("portfolio"),
+    }
+
+
+@app.post("/api/portfolio/csv")
+async def portfolio_csv(text: str = Body(..., media_type="text/plain")):
+    if len(text) > 8_000_000:
+        raise HTTPException(413, "Файл слишком большой (>8 МБ)")
+    res = ta_mod.save_csv(text)
+    return res
+
+
+@app.get("/api/portfolio/ai-review")
+async def portfolio_ai_review(days: int = 90):
+    if not settings.role_enabled("portfolio"):
+        raise HTTPException(400, "Агент «Аналитик сделок» выключен в Настройках")
+    from llm_client import chat as llm_chat, has_key, parse_json_verdict
+    if not has_key("portfolio"):
+        raise HTTPException(400, "Введите AI-ключ в Настройках, чтобы аналитик сделок заработал")
+    try:
+        data = await ta_mod.load_trades(days=days)
+    except BybitAuthError as e:
+        raise HTTPException(400, str(e))
+    stats = ta_mod.compute_stats(data["trades"], days=days)
+    if stats.get("empty"):
+        raise HTTPException(400, "Сделок не найдено за этот период")
+
+    async def gen():
+        messages = ta_mod.build_trade_prompt(stats, data["trades"])
+        yield _ev("status", {"text": "Аналитик разбирает вашу историю сделок…"})
+        try:
+            text = await llm_chat("portfolio", messages, json_mode=True, max_tokens=1600)
+            review = parse_json_verdict(text)
+            review["model"] = settings.role_model("portfolio")["model"]
+            review["tokens_est"] = (sum(len(str(m["content"])) for m in messages) + len(text)) // 4
+            yield _ev("review", review)
+        except Exception as e:
+            yield _ev("error", {"message": str(e)[:300]})
+        yield _ev("done", {})
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+# ---------------------------------------------------------------------- #
+# Настройки
+# ---------------------------------------------------------------------- #
+@app.get("/api/config")
+async def get_config():
+    cfg = settings.public_config()
+    cfg["role_meta"] = {r: role_meta(r) for r in settings.ROLE_KEYS}
+    cfg["env_path"] = ENV_PATH
+    return cfg
+
+
+class ConfigUpdate(BaseModel):
+    updates: dict
+
+
+@app.post("/api/config")
+async def update_config(body: ConfigUpdate):
+    applied = settings.apply_update(body.updates or {})
+    return {"applied": list(applied.keys()), "config": settings.public_config()}
+
+
+@app.get("/api/config/test")
+async def test_roles(role: str = "all"):
+    roles = settings.ROLE_KEYS if role == "all" else [role]
+    results = {}
+    for r in roles:
+        results[r] = await test_role(r)
+    return {"results": results}
+
+
+@app.get("/api/models")
+async def models():
+    try:
+        ids = await list_models()
+        return {"models": ids}
+    except LLMError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(400, f"Не удалось получить список моделей: {str(e)[:200]}")
+
+
+# ---------------------------------------------------------------------- #
+# Live
+# ---------------------------------------------------------------------- #
+@app.get("/api/live/state")
+async def live_state():
+    eng = get_engine()
+    return {"state": eng.state(), "feed": eng.feed[-30:], "prices": eng.prices}
+
+
+@app.websocket("/ws")
+async def ws(ws: WebSocket):
+    eng = get_engine()
+    await eng.add(ws)
+    try:
+        while True:
+            # держим соединение; клиент может слать ping-текст
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        eng.drop(ws)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host=settings.PORTAL_HOST, port=settings.PORTAL_PORT, log_level="info")

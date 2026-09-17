@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TradeVision Portal — AI-анализ Bybit</title>
+    <link rel="stylesheet" href="/static/css/portal.css">
+</head>
+<body>
+<div class="bg-aurora"></div>
+<div class="bg-grid"></div>
+
+<div id="app">
+    <header>
+        <div class="logo">
+            <div class="logo-orb">◈</div>
+            <div>
+                <h1>TradeVision</h1>
+                <small>AI · Bybit · Analytics</small>
+            </div>
+        </div>
+        <nav id="nav">
+            <button data-page="terminal" class="active">📈 Терминал</button>
+            <button data-page="signals">⚡ Сигналы</button>
+            <button data-page="portfolio">💼 Мои сделки</button>
+            <button data-page="settings">⚙️ Настройки</button>
+        </nav>
+        <div class="spacer"></div>
+        <span class="badge-src" id="data-badge" title="Источник данных">…</span>
+        <div class="conn" id="conn"><span class="dot"></span><span id="conn-text">подключение…</span></div>
+    </header>
+
+    <main>
+        <!-- ============ ТЕРМИНАЛ ============ -->
+        <section class="page active" id="page-terminal">
+            <div class="watch-col">
+                <div class="panel" style="flex:1">
+                    <div class="panel-head">👁 Watchlist <span class="sub" id="watch-count"></span>
+                        <div class="spacer"></div>
+                        <button class="btn btn-sm" id="add-symbol-btn">+ добавить</button>
+                    </div>
+                    <div class="panel-body" id="watchlist"><div class="empty">Загрузка…</div></div>
+                </div>
+            </div>
+            <div class="terminal-col">
+                <div class="panel chart-panel">
+                    <div class="panel-head">
+                        <span class="chart-symbol" id="chart-symbol">BTCUSDT<span class="mk" id="chart-mk">PERP</span></span>
+                        <div class="tf-group" id="tf-group"></div>
+                        <div class="spacer"></div>
+                        <span class="sub" id="chart-source"></span>
+                        <button class="btn btn-accent" id="council-btn">🤖 Совет агентов</button>
+                    </div>
+                    <div id="tv-chart"></div>
+                </div>
+                <div class="panel" style="max-height:220px">
+                    <div class="panel-head">⚡ Последние сигналы по watchlist'у
+                        <div class="spacer"></div>
+                        <span class="sub" id="live-state-label"></span>
+                    </div>
+                    <div class="panel-body" id="mini-feed"><div class="empty">Ждём сигналы…</div></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ СИГНАЛЫ ============ -->
+        <section class="page" id="page-signals">
+            <div class="panel" style="flex:0 0 auto">
+                <div class="panel-head">⚡ Live-лента сигналов
+                    <span class="sub">индикаторные, AI-токены не тратятся · клик по карточке → открыть график</span>
+                    <div class="spacer"></div>
+                    <label class="chk"><input type="checkbox" id="ntf-sound"> 🔊 звук</label>
+                    <label class="chk"><input type="checkbox" id="ntf-toasts"> 🔔 всплывашки</label>
+                </div>
+            </div>
+            <div class="feed" id="feed"></div>
+        </section>
+
+        <!-- ============ МОИ СДЕЛКИ ============ -->
+        <section class="page" id="page-portfolio">
+            <div class="pf-grid">
+                <div class="panel" style="flex:0 0 auto">
+                    <div class="panel-head">💼 Анализ ваших сделок на Bybit
+                        <span class="sub" id="pf-source"></span>
+                        <div class="spacer"></div>
+                        <div class="tf-group" id="pf-period">
+                            <button data-days="30">30д</button>
+                            <button data-days="90" class="active">90д</button>
+                            <button data-days="180">180д</button>
+                        </div>
+                        <button class="btn" id="pf-reload">⟳ Обновить</button>
+                        <button class="btn btn-accent" id="pf-ai-btn">🤖 AI-разбор торговли</button>
+                    </div>
+                    <div class="panel-body" id="pf-body" style="overflow:visible">
+                        <div class="empty" id="pf-empty">
+                            Введите <b>read-only</b> ключи Bybit в Настройках — или перетащите сюда CSV-экспорт сделок.
+                            <div class="dropzone" id="csv-drop" style="margin-top:14px">📂 Перетащите CSV-экспорт Bybit сюда<br><span style="font-size:11px">(Bybit → Orders → Export → Trade History)</span></div>
+                        </div>
+                        <div id="pf-content" style="display:none">
+                            <div class="stat-cards" id="pf-stats"></div>
+                            <div class="pf-cols" style="margin-top:18px">
+                                <div>
+                                    <div class="hint" style="margin:0 0 6px 2px">Кривая эквити (накопленный PnL)</div>
+                                    <div id="equity-chart"></div>
+                                    <div class="hint" style="margin:14px 0 6px 2px">Замеченные паттерны</div>
+                                    <ul class="patterns" id="pf-patterns"></ul>
+                                </div>
+                                <div>
+                                    <div class="hint" style="margin:0 0 6px 2px">По монетам (худшие сверху)</div>
+                                    <table class="tbl" id="pf-symbols"></table>
+                                </div>
+                            </div>
+                            <div class="hint" style="margin:18px 0 6px 2px">Последние сделки</div>
+                            <table class="tbl" id="pf-recent"></table>
+                        </div>
+                        <div id="pf-review" style="margin-top:18px"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ НАСТРОЙКИ ============ -->
+        <section class="page" id="page-settings">
+            <div class="set-grid">
+                <div class="panel">
+                    <div class="panel-head">🔑 AI (justcode.lol)
+                        <div class="spacer"></div>
+                        <button class="btn btn-sm" id="test-models-btn">🔌 Проверить модели</button>
+                        <button class="btn btn-accent btn-sm" id="save-ai-btn">💾 Сохранить</button>
+                    </div>
+                    <div class="panel-body">
+                        <div class="kv"><label>Base URL</label><input type="text" id="set-ai-url"></div>
+                        <div class="kv"><label>Глобальный API-ключ</label><input type="password" id="set-ai-key" placeholder="один ключ для всех ролей"></div>
+                        <div class="hint">Графики и live-сигналы работают и без ключа (чистые индикаторы).
+                        Ключ нужен для «🤖 Совет агентов» и «💼 AI-разбор» — берётся из вашего
+                        <code>justcode.lol</code> аккаунта. Ключи хранятся только локально в <code>portal/.env</code>.</div>
+                        <div class="hint" style="margin-top:12px"><b>Модели по ролям</b> — после ввода ключа нажмите «Загрузить список моделей»:</div>
+                        <div id="roles-settings" style="margin-top:8px"></div>
+                        <button class="btn btn-sm" id="load-models-btn" style="margin-top:4px">⬇ Загрузить список моделей</button>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-head">📈 Bybit — read-only ключи (для «Мои сделки»)
+                        <div class="spacer"></div>
+                        <button class="btn btn-accent btn-sm" id="save-bybit-btn">💾 Сохранить</button>
+                    </div>
+                    <div class="panel-body">
+                        <div class="kv"><label>Соединение</label><span id="bybit-conn" class="hint">не проверялось</span><button class="btn btn-sm" id="ping-bybit-btn">🔍 Проверить</button></div>
+                        <div class="kv"><label>API Key (read-only)</label><input type="password" id="set-bb-key"></div>
+                        <div class="kv"><label>API Secret</label><input type="password" id="set-bb-secret" placeholder="виден только здесь, сохраняется локально"></div>
+                        <div class="hint">⚠️ Создавайте ключ <b>только с правом чтения</b>: Bybit → API Management →
+                        <code>Create New Key</code> → отметьте <code>Read-Only</code>. Платформа сделки никогда не совершает —
+                        эти ключи нужны лишь, чтобы читать вашу историю. Графики работают и без ключей.</div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-head">👁 Watchlist и live-сигналы
+                        <div class="spacer"></div>
+                        <button class="btn btn-accent btn-sm" id="save-live-btn">💾 Сохранить</button>
+                    </div>
+                    <div class="panel-body">
+                        <div class="watchlist-edit" id="wl-chips"></div>
+                        <div class="kv" style="margin-top:10px"><label>Добавить монету</label>
+                            <input type="text" id="wl-add" list="wl-symbols" placeholder="напр. LSKUSDT">
+                            <datalist id="wl-symbols"></datalist>
+                        </div>
+                        <div class="kv"><label>Интервал сканера, сек</label><input type="number" id="set-scan-interval" min="10"></div>
+                        <div class="kv"><label>Таймфрейм сигналов</label>
+                            <select id="set-signal-tf"><option>1m</option><option>3m</option><option selected>5m</option><option>15m</option><option>30m</option><option>1h</option><option>4h</option></select>
+                        </div>
+                        <div class="kv"><label>Порог уверенности (0-1)</label><input type="number" id="set-min-conf" step="0.05" min="0" max="1"></div>
+                        <div class="kv"><label>Стратегия сигналов</label>
+                            <select id="set-signal-strategy"><option value="auto">⚡ auto — подбор по графику</option></select>
+                        </div>
+                        <div class="hint">Сигналы считаются индикаторами математически — <b>AI-токены не тратятся</b>.
+                        AI подключается только по кнопке «Совет агентов».</div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-head">🛡️ Правила и хранилище</div>
+                    <div class="panel-body">
+                        <div class="kv"><label>Макс. сделок в день</label><input type="number" id="set-max-trades" min="1"></div>
+                        <div class="kv"><label>Мин. Take-Profit, %</label><input type="number" id="set-min-tp" step="0.1" min="0.1"></div>
+                        <div class="kv"><label>Макс. удержание, ч</label><input type="number" id="set-max-hold" step="0.5" min="0.5"></div>
+                        <div class="kv"><label>Дефолт Stop-Loss, %</label><input type="number" id="set-sl" step="0.1" min="0.1"></div>
+                        <div class="hint" style="margin-top:12px">Настройки хранятся локально в <code id="env-path">portal/.env</code>
+                        (файл создаётся автоматически при первом запуске; в git/архив не попадает —
+                        ключи не утекут). После «Сохранить» всё применяется мгновенно, перезапуск не нужен.</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+</div>
+
+<!-- Модалка совета агентов -->
+<div class="modal-wrap" id="council-modal">
+    <div class="modal">
+        <div class="modal-head">
+            <span>🤖 Совет агентов</span>
+            <span class="sub" id="council-label" style="font-weight:500;color:var(--muted);font-size:12px"></span>
+            <button class="x" id="council-close">✕</button>
+        </div>
+        <div class="modal-body" id="council-body"></div>
+    </div>
+</div>
+
+<div id="toasts"></div>
+
+<script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
+<script src="/static/js/portal.js"></script>
+</body>
+</html>
