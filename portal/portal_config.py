@@ -90,6 +90,10 @@ class PortalSettings(BaseSettings):
     MANUAL_TP_PCT: float = 0.0
     MANUAL_SL_PCT: float = 0.0
     MANUAL_HOLD_MIN: float = 0.0     # целевая длительность сделки, мин (0 = не задано)
+    # Размер позиции под сигнал (для отображения): депозит/риск%/плечо
+    DEPOSIT_USD: float = 1000.0
+    RISK_PER_TRADE_PCT: float = 3.0  # доля депозита, которой рискуем в одной сделке
+    LEVERAGE: float = 20.0           # плечо при расчёте объёма/маржи
 
     # Правила дэйтрейдинга (для отображения и контекста агентов)
     # 0 = без лимита (пользователь снял границу 30/день).
@@ -176,6 +180,11 @@ class PortalSettings(BaseSettings):
                     "sl_pct": self.MANUAL_SL_PCT,
                     "hold_min": self.MANUAL_HOLD_MIN,
                 },
+                "risk_calc": {
+                    "deposit_usd": self.DEPOSIT_USD,
+                    "risk_per_trade_pct": self.RISK_PER_TRADE_PCT,
+                    "leverage": self.LEVERAGE,
+                },
             },
             "rules": {
                 "max_trades_per_day": self.MAX_TRADES_PER_DAY,
@@ -201,6 +210,9 @@ class PortalSettings(BaseSettings):
         "manual_tp_pct": ("MANUAL_TP_PCT", "MANUAL_TP_PCT"),
         "manual_sl_pct": ("MANUAL_SL_PCT", "MANUAL_SL_PCT"),
         "manual_hold_min": ("MANUAL_HOLD_MIN", "MANUAL_HOLD_MIN"),
+        "deposit_usd": ("DEPOSIT_USD", "DEPOSIT_USD"),
+        "risk_per_trade_pct": ("RISK_PER_TRADE_PCT", "RISK_PER_TRADE_PCT"),
+        "leverage": ("LEVERAGE", "LEVERAGE"),
         "min_confidence": ("MIN_CONFIDENCE", "MIN_CONFIDENCE"),
         "signal_strategy": ("SIGNAL_STRATEGY", "SIGNAL_STRATEGY"),
         "notify_sound": ("NOTIFY_SOUND", "NOTIFY_SOUND"),

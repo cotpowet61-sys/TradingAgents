@@ -91,6 +91,9 @@ def read_outcomes() -> List[dict]:
     return out
 
 
+BLOCK_TTL_MS = 3 * 86_400_000  # блок живёт 3 дня, потом — проба (рынок меняется)
+
+
 def compute_rules(outcomes: Optional[List[dict]] = None) -> Dict[str, List[dict]]:
     """→ {symbol: [правило, ...]}. Только реальные исходы (REFRESH не считаем)."""
     rows = [o for o in (outcomes if outcomes is not None else read_outcomes())
@@ -109,7 +112,8 @@ def compute_rules(outcomes: Optional[List[dict]] = None) -> Dict[str, List[dict]
                 "winrate": wr, "total_pnl_pct": total}
         if n >= HARD_SAMPLE and wr < BLOCK_WR and total < 0:
             rule.update({"action": "block", "conf_delta": None,
-                         "note": f"{side} по «{stype}» глушится: wr {wr}% за {n} сигналов (Σ {total}%)"})
+                         "expires_at": int(time.time() * 1000) + BLOCK_TTL_MS,
+                         "note": f"{side} по «{stype}» глушится на 3 дня: wr {wr}% за {n} сигналов (Σ {total}%)"})
         elif n >= MIN_SAMPLE and wr < TIGHTEN_WR:
             rule.update({"action": "tighten", "conf_delta": TIGHTEN_DELTA,
                          "note": f"порог +{TIGHTEN_DELTA}: wr {wr}% за {n} сигналов"})
@@ -177,6 +181,12 @@ def get_adjustment(symbol: str, stype: str, side: str) -> Optional[dict]:
     if not hit:
         return None
     if hit["action"] == "block":
+        exp = hit.get("expires_at") or 0
+        if exp and int(time.time() * 1000) > exp:
+            # TTL вышел → авто-проба с ужесточённым порогом (не молчим вечно)
+            return {"blocked": False, "conf_delta": TIGHTEN_DELTA, "action": "probation",
+                    "note": f"проба после 3-дневного блока (wr была {hit['winrate']}%) — порог +{TIGHTEN_DELTA}",
+                    "sample": hit["sample"], "winrate": hit["winrate"]}
         return {"blocked": True, "note": hit["note"], "sample": hit["sample"], "winrate": hit["winrate"]}
     if hit["conf_delta"]:
         return {"blocked": False, "conf_delta": hit["conf_delta"], "action": hit["action"],
@@ -218,3 +228,44 @@ def reset(symbol: Optional[str] = None) -> dict:
     except OSError:
         _rules_mtime = 0.0
     return {"removed": removed, "symbols_left": list(rules.keys())}
+
+
+def apply_actions(actions: List[dict], source: str = "ai-curator") -> List[dict]:
+    """Применяет правки к правилам (от AI-куратора). ops: keep/unblock/block/tighten/boost."""
+    allowed = {"keep", "unblock", "block", "tighten", "boost"}
+    rules = fresh_rules() or compute_rules()
+    applied = []
+    now_ms = int(time.time() * 1000)
+    for a in actions or []:
+        op = (a.get("op") or "").lower()
+        sym, side = (a.get("symbol") or "").upper(), (a.get("side") or "").upper()
+        stype_l = (a.get("stype") or "").lower()
+        if op not in allowed or not sym:
+            continue
+        lst = rules.get(sym) or []
+        hit = next((r for r in lst if (r.get("stype") or "").lower() == stype_l
+                    and (r.get("side") or "") == side), None)
+        if not hit or op == "keep":
+            continue
+        reason = (a.get("reason") or "").strip()[:220]
+        if op == "unblock":
+            hit.update({"action": "watch", "conf_delta": 0.0, "expires_at": 0,
+                        "note": f"снятие блока куратором: {reason or 'восстановление наблюдения'}"})
+        elif op == "block":
+            hit.update({"action": "block", "conf_delta": None,
+                        "expires_at": now_ms + BLOCK_TTL_MS,
+                        "note": f"блок куратора (3 дня): {reason or hit.get('note', '')}"})
+        elif op == "tighten":
+            hit.update({"action": "tighten", "conf_delta": TIGHTEN_DELTA,
+                        "note": f"порог ↑ куратором: {reason or hit.get('note', '')}"})
+        elif op == "boost":
+            hit.update({"action": "boost", "conf_delta": BOOST_DELTA,
+                        "note": f"порог ↓ куратором: {reason or hit.get('note', '')}"})
+        hit["ai_curated"] = {"op": op, "at": now_ms, "reason": reason}
+        applied.append({"symbol": sym, "stype": hit.get("stype"), "side": side, "op": op})
+    if applied:
+        save_rules(rules)
+        global _rules_cache, _rules_mtime
+        _rules_cache = rules
+        _rules_mtime = time.time()
+    return applied

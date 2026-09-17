@@ -104,6 +104,7 @@
                 <div class="panel-head">🧠 Обучение сканера
                     <span class="sub">разбирает исход каждого сигнала по монете → глушит проигрышные комбинации, подстраивает порог · 0 AI-токенов</span>
                     <div class="spacer"></div>
+                    <button class="btn btn-accent" id="learn-curator" title="gpt-6-astra разберёт правила и внесёт корректировки (1 запрос, токены ~копейки)">🤖 AI-куратор</button>
                     <button class="btn" id="learn-refresh">⟳</button>
                     <button class="btn" id="learn-reset" title="Стереть всю накопленную статистику обучения">сброс</button>
                 </div>
@@ -246,6 +247,13 @@
                             </div>
                         </div>
                         <div class="hint" style="margin-top:-4px">TP/SL &gt; 0 → сигналы получают именно эти цели (приоритет над 2:1 и ATR). 0 = не вмешиваться.</div>
+                        <div class="kv"><label>Депозит и риск</label>
+                            <div class="risk-row">
+                                <input type="number" id="set-deposit" step="50" min="0" placeholder="$ деп" title="Ваш депозит, $ — для расчёта объёма позиции в сигналах">
+                                <input type="number" id="set-risk-pct" step="0.5" min="0" placeholder="риск %" title="Риск на сделку в % депозита (напр. 3)">
+                                <input type="number" id="set-leverage" step="1" min="1" max="100" placeholder="плечо" title="Плечо для расчёта маржи/объёма (напр. 20)">
+                            </div>
+                        </div>
                         <div class="kv"><label>Стратегия сигналов</label>
                             <select id="set-signal-strategy"><option value="auto">⚡ auto — подбор по графику</option></select>
                         </div>

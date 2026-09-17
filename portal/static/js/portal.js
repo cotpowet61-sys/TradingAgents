@@ -342,6 +342,7 @@ function signalCardHTML(s) {
         </div>
         <div class="sc-strat">${esc(s.strategy)}${s.strategy_auto ? ' · <span class="auto">⚡ авто-подбор по графику</span>' : ''} · TF ${s.timeframe}${s.rr_free ? ' · <span style="color:var(--cyan)">TP/SL по ATR графика</span>' : ''}${s.risk_manual ? ' · <span style="color:var(--cyan)">🎛 ручной риск' + (s.hold_min ? ` · ⏱ ~${Math.round(s.hold_min)} мин` : '') + '</span>' : ''}${s.my_strategy && s.my_strategy.hits ? ` · <span style="color:#7de9c3">🎯 ваша стратегия ${s.my_strategy.hits}/${s.my_strategy.total}</span>` : ''}${s.learned && s.learned.note ? ` · <span style="color:var(--amber)" title="Правило из самообучения сканера">🧠 ${esc(s.learned.note)}</span>` : ''}</div>
         ${s.reason ? `<div class="sc-strat" style="opacity:.8">${esc(s.reason)}</div>` : ''}
+        ${s.sizing ? `<div class="sc-strat" style="color:#9fd3ff">💵 ${s.sizing.qty} ${s.symbol.replace('USDT','')} ≈ $${s.sizing.notional} (маржа $${s.sizing.margin} @${s.sizing.leverage}x) · риск −$${s.sizing.risk_usd} / цель +$${s.sizing.tp_usd}${s.sizing.fee ? ` · комиссия ≈$${s.sizing.fee}` : ''}${s.sizing.capped ? ' · ⚠️ урезано под 95% депозита' : ''}</div>` : ''}
         <div class="conf-bar"><i style="width:${confPct}%"></i></div>
     </div>`;
 }
@@ -880,6 +881,10 @@ function renderSettings(cfg) {
     if ($('set-risk-tp')) $('set-risk-tp').value = mr.tp_pct || 0;
     if ($('set-risk-sl')) $('set-risk-sl').value = mr.sl_pct || 0;
     if ($('set-risk-hold')) $('set-risk-hold').value = mr.hold_min || 0;
+    const rc = cfg.live.risk_calc || {};
+    if ($('set-deposit')) $('set-deposit').value = rc.deposit_usd ?? 1000;
+    if ($('set-risk-pct')) $('set-risk-pct').value = rc.risk_per_trade_pct ?? 3;
+    if ($('set-leverage')) $('set-leverage').value = rc.leverage ?? 20;
     $('set-min-tp').value = cfg.rules.min_tp_pct;
     $('set-max-hold').value = cfg.rules.max_hold_hours;
     $('set-sl').value = cfg.rules.default_sl_pct;
@@ -959,6 +964,9 @@ function collectUpdates() {
     u.manual_tp_pct = parseFloat(v('set-risk-tp')) || 0;
     u.manual_sl_pct = parseFloat(v('set-risk-sl')) || 0;
     u.manual_hold_min = parseFloat(v('set-risk-hold')) || 0;
+    u.deposit_usd = parseFloat(v('set-deposit')) || 1000;
+    u.risk_per_trade_pct = parseFloat(v('set-risk-pct')) || 0;
+    u.leverage = parseFloat(v('set-leverage')) || 20;
     u.min_tp_pct = parseFloat(v('set-min-tp')) || 2;
     u.max_hold_hours = parseFloat(v('set-max-hold')) || 4;
     u.default_sl_pct = parseFloat(v('set-sl')) || 1;
@@ -1105,6 +1113,20 @@ async function loadLearned() {
     } catch (e) { /* тихо */ }
 }
 $('learn-refresh') && $('learn-refresh').addEventListener('click', loadLearned);
+$('learn-curator') && $('learn-curator').addEventListener('click', async () => {
+    const b = $('learn-curator');
+    b.disabled = true; b.textContent = '⏳ gpt-6-astra разбирает…';
+    try {
+        const d = await API.post('/api/signals/ai-curator', {});
+        loadLearned();
+        const n = (d.applied || []).length;
+        toast(`🤖 Куратор (${d.model}): ${n ? n + ' правок' : 'без правок'}${d.summary ? ' — ' + esc(d.summary) : ''}`, 'long', 12000);
+    } catch (e) {
+        toast('❌ ' + e.message);
+    } finally {
+        b.disabled = false; b.textContent = '🤖 AI-куратор';
+    }
+});
 $('learn-reset') && $('learn-reset').addEventListener('click', async () => {
     try { await API.post('/api/signals/learned/reset', {}); loadLearned(); toast('🧠 Статистика обучения стёрта'); }
     catch (e) { toast('❌ ' + e.message); }

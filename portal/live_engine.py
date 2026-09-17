@@ -198,6 +198,37 @@ class LiveEngine:
         px = (self.prices.get(sym) or {}).get("last")
         return True, self._close_event(act, "REVERSED", px)
 
+    @staticmethod
+    def _sizing(entry: float, side: str, tp: float, sl: float) -> Optional[dict]:
+        """Размер позиции под сигнал: риск $ = депозит × риск%, объём = риск / дистанция SL.
+        Кап: маржа ≤ 95% депозита. Комиссия тейкера Bybit ~0.055% × 2 стороны."""
+        if not entry or not tp or not sl:
+            return None
+        d_sl = abs(entry - sl) / entry
+        d_tp = abs(tp - entry) / entry
+        if d_sl <= 0:
+            return None
+        dep = settings.DEPOSIT_USD
+        risk_usd = dep * settings.RISK_PER_TRADE_PCT / 100
+        if dep <= 0 or risk_usd <= 0:
+            return None          # сайзинг выключен (риск/депозит = 0)
+        lev = max(1.0, settings.LEVERAGE)
+        notional = risk_usd / d_sl
+        max_notional = dep * 0.95 * lev
+        capped = notional > max_notional
+        notional = min(notional, max_notional)
+        return {
+            "risk_usd": round(notional * d_sl, 2),
+            "planned_risk": round(risk_usd, 2),
+            "margin": round(notional / lev, 2),
+            "notional": round(notional, 2),
+            "qty": round(notional / entry, 6),
+            "tp_usd": round(notional * d_tp, 2),
+            "fee": round(notional * 0.00055 * 2, 2),
+            "leverage": lev,
+            "capped": capped,
+        }
+
     async def scan_once(self):
         market = get_market()
         symbols = settings.watchlist
@@ -320,6 +351,7 @@ class LiveEngine:
                         "tp": tp2,
                         "sl": sl2,
                         "confidence": sig.confidence,
+                        "sizing": self._sizing(sig.entry or 0, sig.side.value, tp2, sl2),
                         "strategy": strat.name,
                         "strategy_auto": stype is not None and settings.SIGNAL_STRATEGY in (None, "", "auto"),
                         "reason": sig.reason,

@@ -454,6 +454,68 @@ async def signals_learned_reset(payload: dict = Body(default={})):
     return L.reset((payload.get("symbol") or "").strip().upper() or None)
 
 
+@app.post("/api/signals/ai-curator")
+async def signals_ai_curator():
+    """AI-куратор обучения: gpt-6-astra разбирает правила по монетам и вносит
+    корректировки (снять стухший блок / доблокировать убыточное / сместить порог).
+    Один запрос к LLM — токены тратятся только по нажатию."""
+    import signal_learner as L
+    from llm_client import chat as llm_chat, has_key, LLMError, parse_json_verdict
+    if not settings.role_enabled("strategist"):
+        raise HTTPException(400, "Роль «Советник (стратег)» выключена в Настройках — включите её для куратора")
+    if not has_key("strategist"):
+        raise HTTPException(400, "Нужен AI-ключ (глобальный или для Советника) — введите в Настройках")
+
+    rules = L.fresh_rules() or L.compute_rules()
+    outcomes = L.read_outcomes()
+    # компактный дайджест: правила + хвост журнала по итогам на монету
+    per_sym = {}
+    for o in outcomes:
+        if o.get("reason") not in ("TP", "SL", "TIMEOUT", "REVERSED") or o.get("pnl_pct") is None:
+            continue
+        a = per_sym.setdefault(o["symbol"], {"n": 0, "wins": 0, "pnl": 0.0})
+        a["n"] += 1
+        a["wins"] += 1 if o["pnl_pct"] > 0 else 0
+        a["pnl"] += o["pnl_pct"]
+    if not rules and not per_sym:
+        raise HTTPException(400, "Пока нечего разбирать: пусть сканер поработает и закроет первые сигналы, потом вызывайте куратора.")
+
+    digest = {
+        "rules": rules,
+        "outcomes_per_symbol": {k: {"signals": v["n"], "winrate": round(100 * v["wins"] / v["n"], 1),
+                                    "total_pnl_pct": round(v["pnl"], 2)} for k, v in per_sym.items()},
+        "thresholds": {"block": f">={L.HARD_SAMPLE} сигналов и wr<{L.BLOCK_WR}% и Σ<0",
+                       "tighten": f">={L.MIN_SAMPLE} и wr<{L.TIGHTEN_WR}% → порог +{L.TIGHTEN_DELTA}",
+                       "boost": f"wr>={L.BOOST_WR}% → порог {L.BOOST_DELTA}", "block_ttl_h": 72},
+    }
+    system = (
+        "Ты — краткий и жёсткий куратор сканера сигналов. Тебе дают самообучающиеся правила "
+        "по монетам (block/tighten/boost/watch с winrate и выборкой) и сводку исходов. Рынок меняется, "
+        "поэтому задача — почистить правила: снять блоки, которые душат потенциально рабочие связки "
+        "(маленькая выборка, устаревший период, но живая монета) → unblock; оставить/назначить block только при убедительной "
+        "убыточности; scatter точечные tighten/boost где они очевидно помогают. НЕ более 10 действий. "
+        "СТРОГО ответ одним JSON: {\"actions\":[{\"symbol\":\"BTCUSDT\",\"stype\":\"sr_bounce\","
+        "\"side\":\"SHORT\",\"op\":\"unblock|block|tighten|boost|keep\",\"reason\":\"коротко по-русски\"}, ...], "
+        "\"summary\":\"2-3 предложения по-русски: что сделано и общий вывод по обучению\"}"
+    )
+    user = json.dumps(digest, ensure_ascii=False)
+    try:
+        raw = await llm_chat("strategist", [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ], json_mode=True, max_tokens=900)
+        data = parse_json_verdict(raw)
+    except LLMError as e:
+        raise HTTPException(502, f"AI-куратор недоступен: {e}")
+    except Exception as e:
+        raise HTTPException(502, f"AI-куратор ответил некорректно ({type(e).__name__}) — попробуйте ещё раз")
+
+    applied = L.apply_actions(data.get("actions") or [])
+    return {"applied": applied, "summary": data.get("summary") or "",
+            "model": settings.role_model("strategist")["model"],
+            "rules": L.fresh_rules(), "outcomes": len(outcomes)}
+
+
 @app.post("/api/signals/backtest")
 async def signals_backtest(payload: dict = Body(default={})):
     """Бэктест live-сканера: те же монеты/ТФ/правила риска, только на истории.
