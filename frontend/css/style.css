@@ -114,10 +114,28 @@ body { display: flex; flex-direction: column; overflow: hidden; }
 .consensus-row { display: grid; grid-template-columns: 1fr 360px; gap: 18px; flex: 0 0 auto; }
 
 .coins-card, .log-card { min-height: 0; }
+#panel-coin .coins-card .card-body { display: flex; flex-direction: column; overflow: hidden; }
+#coins-list { overflow-y: auto; }
 .chart-card { min-height: 0; position: relative; display: flex; flex-direction: column; }
 #tradingview-chart, .chart-fallback { flex: 1; min-height: 380px; width: 100%; }
 .chart-fallback { display: flex; }
 .chart-fallback canvas { width: 100%; height: 100%; min-height: 380px; display: block; }
+
+/* Раздел «Монета»: список и фильтр */
+.filter-input {
+    width: 100%; margin-bottom: 8px; box-sizing: border-box;
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border-2); border-radius: 8px;
+    padding: 8px 10px; font-size: 12px; font-family: var(--mono);
+}
+.filter-input:focus { outline: none; border-color: var(--accent); }
+.coin-alpha { flex: 1; overflow-y: auto; min-height: 0; }
+.coin-label { font-weight: 700; font-size: 15px; font-family: var(--mono); color: var(--text); }
+
+/* Бейдж источника данных (Bybit / учебные) */
+.badge.data-src { font-size: 10px; }
+.badge.data-src.ok { background: rgba(46,189,133,.12); color: #2ebd85; border-color: rgba(46,189,133,.35); }
+.badge.data-src.warn { background: rgba(247,166,0,.12); color: #f7a600; border-color: rgba(247,166,0,.35); }
 #equity-canvas { width: 100%; display: block; }
 
 .chart-toolbar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }

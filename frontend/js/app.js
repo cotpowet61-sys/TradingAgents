@@ -11,6 +11,14 @@ const state = {
     config: null,
     es: null, // текущий EventSource (стриминг-анализ)
     tvLoading: false,
+    dataSource: 'unknown',
+    // раздел «Монета»
+    coin: {
+        symbol: 'BTCUSDT',
+        tf: '15m',
+        allCoins: [],      // полный список (для фильтра)
+        single: null,      // состояние движка 1-на-1
+    },
 };
 
 /* ---------- Навигация по вкладкам ---------- */
@@ -23,6 +31,7 @@ function initNav() {
             document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
             if (btn.dataset.tab === 'backtest') redrawEquity();
             if (btn.dataset.tab === 'dashboard') resizeChart();
+            if (btn.dataset.tab === 'coin') loadCoinChart();
             if (btn.dataset.tab === 'settings') loadSettings();
         });
     });
@@ -44,15 +53,39 @@ async function init() {
     refreshTickers();
     initLive();
     initAssistant();
+    initCoinTab();
+    refreshDataBadge();
 
     connectWS(onWsEvent, (s) => { state.live = s || {}; renderLive(); });
     setInterval(refreshTickers, 30000);
     setInterval(refreshLiveState, 10000);
+    setInterval(refreshDataBadge, 60000);
+    setInterval(refreshSingleState, 15000);
+}
+
+/* ---------- Бейдж источника данных (Bybit / учебные) ---------- */
+async function refreshDataBadge() {
+    try {
+        const s = await API.get('/api/market/status');
+        state.dataSource = s.source;
+        const b = document.getElementById('data-badge');
+        if (s.bybit_ok) {
+            b.textContent = '📡 Bybit Live';
+            b.className = 'badge data-src ok';
+            b.title = `Реальные данные с ${s.host || 'api.bybit.com'}`;
+        } else {
+            b.textContent = '⚠️ Учебные данные';
+            b.className = 'badge data-src warn';
+            b.title = 'Bybit API недоступен с этого компьютера — показаны учебные данные. '
+                + (s.last_error ? ('Причина: ' + s.last_error) : '')
+                + ' Проверьте интернет/VPN и нажмите «Проверить Bybit» в Настройках.';
+        }
+    } catch (e) {}
 }
 
 function setDemoBadge(demo) {
     const b = document.getElementById('demo-badge');
-    if (demo) { b.textContent = 'DEMO'; b.className = 'badge'; }
+    if (demo) { b.textContent = 'AI DEMO'; b.className = 'badge'; }
     else { b.textContent = 'LIVE · AI'; b.className = 'badge live'; }
 }
 
@@ -71,6 +104,8 @@ async function loadSymbols() {
         } catch (e) {}
     }
     state.symbols = symbols;
+    // гарантируем присутствие LSKUSDT в списках, даже если кэш ещё старый
+    if (!symbols.includes('LSKUSDT')) symbols.push('LSKUSDT');
 
     const sel = document.getElementById('chart-symbol');
     sel.innerHTML = symbols.map(s => `<option value="${s}">${s}</option>`).join('');
@@ -179,6 +214,12 @@ function renderSettings(cfg) {
             <div class="kv-row"><label>Base URL</label><input type="text" id="set-base-url" value="${escapeHtml(cfg.base_url)}"></div>
             <div class="kv-row"><label>Глобальный API-ключ</label><input type="password" id="set-global-key" value="${escapeHtml(cfg.global_api_key)}" placeholder="один ключ для всех моделей"></div>
             <p class="muted" style="margin-top:4px">Если ввести глобальный ключ — он подставится во все 5 моделей. Можно задать отдельный ключ для каждой роли ниже.</p>
+            <p class="muted" style="margin-top:4px;background:rgba(108,140,255,.08);padding:8px 10px;border-radius:8px">
+                💡 <b>Важно:</b> торговые <b>сигналы</b> считаются индикаторами математически и работают
+                <b>без AI-ключа вообще</b> — поэтому сигналы уже появляются. Ключ нужен только для
+                разделов «Анализ агентов» (ветки рассуждений) и «Ассистент». Вставили ключ → нажали «Сохранить» →
+                сразу запустите «🤖 Анализ агентов» — всё заработает без перезапуска.
+            </p>
         </div>
         <div class="settings-section">
             <h3>🤖 Модели по ролям</h3>
@@ -186,9 +227,16 @@ function renderSettings(cfg) {
         </div>
         <div class="settings-section">
             <h3>📈 Bybit (публичные данные)</h3>
+            <div class="kv-row"><label>Соединение</label>
+                <span id="bybit-conn" class="muted">не проверялось</span>
+                <button id="ping-bybit-btn" class="btn btn-ghost btn-sm">🔍 Проверить Bybit</button>
+            </div>
             <div class="kv-row"><label>Base URL</label><input type="text" id="set-bybit-url" value="${escapeHtml(cfg.bybit.base_url)}"></div>
             <div class="kv-row"><label>API Key</label><input type="password" id="set-bybit-key" value="${escapeHtml(cfg.bybit.api_key)}" placeholder="необязательно (нужен для реальных ордеров)"></div>
             <div class="kv-row"><label>API Secret</label><input type="password" id="set-bybit-secret" value="" placeholder="необязательно"></div>
+            <p class="muted" style="margin-top:4px">Графики, тикеры и сигналы берутся из публичного API Bybit (ключи НЕ нужны).
+            Если сверху справа бейдж «⚠️ Учебные данные» — Bybit недоступен с этого компьютера
+            (интернет/VPN/файрвол), тогда показываются учебные данные. Нажмите «Проверить Bybit» после исправления.</p>
         </div>
         <div class="settings-section">
             <h3>🛡️ Правила торговли</h3>
@@ -202,6 +250,46 @@ function renderSettings(cfg) {
 
     document.getElementById('test-models-btn').addEventListener('click', testModels);
     document.getElementById('save-settings-btn').addEventListener('click', saveSettings);
+    const pingBtn = document.getElementById('ping-bybit-btn');
+    if (pingBtn) pingBtn.addEventListener('click', pingBybit);
+    refreshBybitConnLabel();
+}
+
+async function refreshBybitConnLabel() {
+    try {
+        const s = await API.get('/api/market/status');
+        _bybitConnLabel(s);
+    } catch (e) {}
+}
+
+function _bybitConnLabel(s) {
+    const el = document.getElementById('bybit-conn');
+    if (!el) return;
+    if (s.bybit_ok) {
+        el.innerHTML = `<span class="up">✓ Bybit отвечает</span> (${s.host || 'api.bybit.com'}${s.latency_ms != null ? ', ' + s.latency_ms + ' мс' : ''})`;
+    } else {
+        el.innerHTML = `<span class="down">✗ недоступен</span> — показаны учебные данные${s.last_error ? ' · <span class="muted">' + escapeHtml(s.last_error).slice(0, 90) + '</span>' : ''}`;
+    }
+}
+
+async function pingBybit() {
+    const btn = document.getElementById('ping-bybit-btn');
+    btn.disabled = true; btn.textContent = '⏳ Проверка…';
+    try {
+        const s = await API.post('/api/market/ping', {});
+        _bybitConnLabel(s);
+        refreshDataBadge();
+        if (s.ok) {
+            toast(`✅ Bybit доступен: ${s.host} (${s.latency_ms} мс). Реальные данные!`);
+            refreshTickers(); loadCanvasCandles();
+        } else {
+            toast('❌ Bybit недоступен с этого компьютера. Проверьте интернет/VPN.');
+        }
+    } catch (e) {
+        toast('❌ Ошибка проверки: ' + e.message);
+    } finally {
+        btn.disabled = false; btn.textContent = '🔍 Проверить Bybit';
+    }
 }
 
 async function saveSettings() {
@@ -427,7 +515,14 @@ function createTvWidget() {
 async function loadCanvasCandles() {
     try {
         const data = await API.get(`/api/klines/${state.currentSymbol}?interval=${state.currentTF}&limit=150`);
-        drawCandles(document.getElementById('candles-canvas'), data.candles || []);
+        drawCandles(document.getElementById('candles-canvas'), data.candles || [],
+            { symbol: state.currentSymbol, interval: state.currentTF });
+        const src = document.getElementById('chart-data-src');
+        if (src) {
+            const isBB = (data.data_source || state.dataSource) === 'bybit';
+            src.textContent = isBB ? '📡 Bybit' : '⚠️ учебные';
+            src.className = 'badge data-src ' + (isBB ? 'ok' : 'warn');
+        }
     } catch (e) {}
 }
 
@@ -448,8 +543,23 @@ function resizeChart() {
    ========================================================================= */
 const AGENT_ORDER = ['strategist', 'momentum', 'contrarian', 'macro', 'risk'];
 
-async function runAnalysis() {
-    const btn = document.getElementById('analyze-btn');
+/* Цели рендера дерева (дашборд / вкладка «Монета») */
+let treeTarget = { rootId: 'tree-root', labelId: 'consensus-symbol' };
+
+function runAnalysis() {
+    startAnalysis({
+        symbol: state.currentSymbol,
+        strategy: document.getElementById('bt-strategy').value,
+        timeframe: state.currentTF,
+        btn: document.getElementById('analyze-btn'),
+        bodyId: 'consensus-body',
+        labelId: 'consensus-symbol',
+        rootId: 'tree-root',
+    });
+}
+
+async function startAnalysis(cfg) {
+    const btn = cfg.btn;
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span> Анализ…';
     setAgentState('all', 'thinking');
@@ -457,34 +567,32 @@ async function runAnalysis() {
     // закрыть предыдущий стрим
     if (state.es) { state.es.close(); state.es = null; }
 
-    const symbol = state.currentSymbol;
-    const strategy = document.getElementById('bt-strategy').value;
-    const timeframe = state.currentTF;
+    const { symbol, strategy, timeframe } = cfg;
+    treeTarget = { rootId: cfg.rootId, labelId: cfg.labelId };
 
-    // подготавливаем дерево
-    const body = document.getElementById('consensus-body');
-    document.getElementById('consensus-symbol').textContent = `${symbol} · ${timeframe}`;
-    body.innerHTML = `<div class="tree-wrap"><div class="tree-root" id="tree-root"></div></div>`;
+    const body = document.getElementById(cfg.bodyId);
+    document.getElementById(cfg.labelId).textContent = `${symbol} · ${timeframe}`;
+    body.innerHTML = `<div class="tree-wrap"><div class="tree-root" id="${cfg.rootId}"></div></div>`;
 
     // используем SSE (fallback на обычный POST, если EventSource недоступен)
     const url = `/api/analyze/stream?symbol=${symbol}&strategy=${strategy}&timeframe=${timeframe}`;
+    const fin = () => finishAnalysis(btn);
     if (typeof EventSource !== 'undefined') {
         state.es = new EventSource(url);
         state.es.addEventListener('snapshot', e => onSnapshot(JSON.parse(e.data)));
         state.es.addEventListener('agent', e => onAgentVerdict(JSON.parse(e.data)));
         state.es.addEventListener('consensus', e => onConsensus(JSON.parse(e.data)));
         state.es.addEventListener('error', e => { try { onStreamError(JSON.parse(e.data)); } catch (_) {} });
-        state.es.addEventListener('done', () => { finishAnalysis(btn); });
-        state.es.onerror = () => { finishAnalysis(btn); if (state.es) state.es.close(); state.es = null; };
+        state.es.addEventListener('done', fin);
+        state.es.onerror = () => { fin(); if (state.es) state.es.close(); state.es = null; };
     } else {
-        // fallback
         try {
             const data = await API.post('/api/analyze', { symbol, strategy, timeframe });
             onSnapshot({ symbol, timeframe, price: data.price, features: data.features, strategy: data.strategy });
             data.agents.forEach(onAgentVerdict);
             onConsensus({ consensus: data.consensus, signal: data.signal });
         } catch (e) { log('error', 'Ошибка анализа: ' + e.message); }
-        finishAnalysis(btn);
+        fin();
     }
 }
 
@@ -495,9 +603,9 @@ function finishAnalysis(btn) {
 }
 
 function onSnapshot(d) {
-    const root = document.getElementById('tree-root');
+    const root = document.getElementById(treeTarget.rootId);
     if (!root) return;
-    document.getElementById('consensus-symbol').textContent =
+    document.getElementById(treeTarget.labelId).textContent =
         `${d.symbol} · ${d.timeframe} · цена ${fmtPrice(d.price)} · стратегия: ${d.strategy.name}`;
     const sig = d.strategy_signal;
     root.insertAdjacentHTML('beforeend', `
@@ -518,7 +626,7 @@ function onSnapshot(d) {
 }
 
 function onAgentVerdict(a) {
-    const root = document.getElementById('tree-root');
+    const root = document.getElementById(treeTarget.rootId);
     if (!root) return;
     // убираем индикатор загрузки
     root.querySelectorAll('.thinking-indicator').forEach(el => el.remove());
@@ -547,7 +655,7 @@ function onAgentVerdict(a) {
 }
 
 function onConsensus(d) {
-    const root = document.getElementById('tree-root');
+    const root = document.getElementById(treeTarget.rootId);
     if (!root) return;
     const cons = d.consensus, sig = d.signal;
     const confPct = Math.round(cons.confidence * 100);
@@ -571,7 +679,7 @@ function onConsensus(d) {
 }
 
 function onStreamError(d) {
-    const root = document.getElementById('tree-root');
+    const root = document.getElementById(treeTarget.rootId);
     if (root) root.insertAdjacentHTML('beforeend', `<div class="empty" style="color:var(--red)">Ошибка: ${escapeHtml(d.message || '')}</div>`);
     log('error', 'Ошибка стриминга: ' + (d.message || ''));
 }
@@ -592,7 +700,6 @@ async function runBacktest(e) {
             symbol: document.getElementById('bt-symbol').value,
             strategy: document.getElementById('bt-strategy').value,
             timeframe: document.getElementById('bt-timeframe').value,
-            limit: parseInt(document.getElementById('bt-limit').value) || 500,
             params,
             tp_pct: parseFloat(document.getElementById('bt-tp').value),
             sl_pct: parseFloat(document.getElementById('bt-sl').value),
@@ -610,10 +717,16 @@ async function runBacktest(e) {
     }
 }
 
+function _srcBadge(source) {
+    return source === 'bybit'
+        ? '<span class="badge data-src ok" style="margin-left:6px">📡 Bybit</span>'
+        : '<span class="badge data-src warn" style="margin-left:6px">⚠️ учебные данные</span>';
+}
+
 function renderBacktest(d) {
     const res = document.getElementById('backtest-results');
     res.innerHTML = `
-        <div class="muted" style="margin-bottom:10px">${d.symbol} · ${d.timeframe} · ${d.strategy}${d.params ? ' · ' + Object.entries(d.params).map(([k,v])=>k+'='+v).join(', ') : ''}${d.start_date ? ` · период ${d.start_date} → ${d.end_date || 'сегодня'}` : ''}</div>
+        <div class="muted" style="margin-bottom:10px">${d.symbol} · ${d.timeframe} · ${d.strategy}${d.params ? ' · ' + Object.entries(d.params).map(([k,v])=>k+'='+v).join(', ') : ''}${d.start_date ? ` · период ${d.start_date} → ${d.end_date || 'сегодня'}` : ' · последние 24ч'}${_srcBadge(d.data_source)}</div>
         <div class="metrics-grid">
             ${metric('Сделок', d.total_trades)}
             ${metric('Win rate', fmt(d.win_rate) + '%', d.win_rate >= 50)}
@@ -670,7 +783,6 @@ async function runBacktestAll() {
         const payload = {
             symbol: document.getElementById('bt-symbol').value,
             timeframe: document.getElementById('bt-timeframe').value,
-            limit: parseInt(document.getElementById('bt-limit').value) || 500,
             tp_pct: parseFloat(document.getElementById('bt-tp').value),
             sl_pct: parseFloat(document.getElementById('bt-sl').value),
             max_hold_hours: parseFloat(document.getElementById('bt-hold').value),
@@ -711,7 +823,7 @@ function renderBacktestAll(d) {
     }).join('');
 
     res.innerHTML = `
-        <div class="muted" style="margin-bottom:10px">${d.symbol} · ${d.timeframe} · TP ${d.tp_pct}% / SL ${d.sl_pct}% · ${d.candles} свечей${d.start_date ? ` · ${d.start_date} → ${d.end_date || 'сегодня'}` : ''}</div>
+        <div class="muted" style="margin-bottom:10px">${d.symbol} · ${d.timeframe} · TP ${d.tp_pct}% / SL ${d.sl_pct}% · ${d.candles} свечей${d.start_date ? ` · ${d.start_date} → ${d.end_date || 'сегодня'}` : ' · последние 24ч'}${_srcBadge(d.data_source)}</div>
         <div class="metrics-grid" style="margin-bottom:12px">
             ${metric('Лучшая стратегия', best ? best.name : '—')}
             ${metric('Win rate', best ? fmt(best.win_rate) + '%' : '—', best && best.win_rate >= 50)}
@@ -760,7 +872,6 @@ async function runOptimize() {
         const data = await API.post('/api/optimize', {
             symbol: document.getElementById('opt-symbol').value,
             timeframe: document.getElementById('opt-timeframe').value,
-            limit: 400,
         });
         renderOptimize(data);
         status.textContent = `готово: отобрано ${data.top_strategies.length} стратегий`;
@@ -888,16 +999,261 @@ async function refreshLiveState() {
 function initLive() { refreshLiveState(); }
 
 /* =========================================================================
+   РАЗДЕЛ «МОНЕТА»: список Bybit (по алфавиту), график, анализ, live 1-на-1
+   ========================================================================= */
+function initCoinTab() {
+    // таймфреймы графика монеты
+    const tfGroup = document.getElementById('coin-tf-group');
+    ['1m', '3m', '5m', '15m', '30m', '1h', '4h'].forEach(tf => {
+        const b = document.createElement('button');
+        b.className = 'tf-btn' + (tf === state.coin.tf ? ' active' : '');
+        b.textContent = tf;
+        b.addEventListener('click', () => {
+            state.coin.tf = tf;
+            tfGroup.querySelectorAll('.tf-btn').forEach(x => x.classList.remove('active'));
+            b.classList.add('active');
+            loadCoinChart();
+        });
+        tfGroup.appendChild(b);
+    });
+
+    // стратегии в «Live 1-на-1» (auto + все 23)
+    const slSt = document.getElementById('sl-strategy');
+    state.strategies.forEach(s => {
+        const o = document.createElement('option');
+        o.value = s.type; o.textContent = s.name;
+        slSt.appendChild(o);
+    });
+
+    document.getElementById('coin-filter').addEventListener('input', renderCoinList);
+    document.getElementById('coin-refresh').addEventListener('click', () => loadCoinList(true));
+    document.getElementById('coin-analyze-btn').addEventListener('click', runCoinAnalysis);
+    document.getElementById('single-start').addEventListener('click', singleStart);
+    document.getElementById('single-apply').addEventListener('click', singleApply);
+    document.getElementById('single-stop').addEventListener('click', singleStop);
+
+    loadCoinList();
+    refreshSingleState();
+    setInterval(() => {
+        if (document.getElementById('panel-coin').classList.contains('active')) loadCoinChart();
+    }, 30000);
+    setInterval(() => {
+        if (document.getElementById('panel-coin').classList.contains('active')) loadCoinList();
+    }, 60000); // список монет обновляется с Bybit
+}
+
+async function loadCoinList(force) {
+    try {
+        const data = await API.get('/api/tickers?all=true');
+        let tickers = data.tickers || [];
+        if (!tickers.find(t => t.symbol === 'LSKUSDT')) {
+            tickers.push({ symbol: 'LSKUSDT', last: 0, change24h: 0, volume24h: 0 });
+        }
+        // ПО АЛФАВИТУ (не по объёму)
+        tickers.sort((a, b) => a.symbol.localeCompare(b.symbol));
+        state.coin.allCoins = tickers;
+        renderCoinList();
+    } catch (e) {}
+}
+
+function renderCoinList() {
+    const box = document.getElementById('coin-alpha-list');
+    const q = (document.getElementById('coin-filter').value || '').trim().toUpperCase();
+    const list = state.coin.allCoins.filter(t => !q || t.symbol.includes(q));
+    if (!list.length) { box.innerHTML = '<div class="empty">Ничего не найдено</div>'; return; }
+    box.innerHTML = list.map(t => {
+        const cls = t.change24h >= 0 ? 'up' : 'down';
+        const sign = t.change24h >= 0 ? '+' : '';
+        return `
+            <div class="coin-item ${t.symbol === state.coin.symbol ? 'selected' : ''}" data-symbol="${t.symbol}">
+                <div>
+                    <div class="coin-name">${t.symbol}</div>
+                    <div class="coin-change ${cls}">${sign}${fmt(t.change24h)}%</div>
+                </div>
+                <div class="coin-last">${t.last ? fmtPrice(t.last) : '—'}</div>
+            </div>`;
+    }).join('');
+    box.querySelectorAll('.coin-item').forEach(el => {
+        el.addEventListener('click', () => selectCoin(el.dataset.symbol));
+    });
+}
+
+function selectCoin(symbol) {
+    state.coin.symbol = symbol;
+    document.getElementById('coin-symbol-label').textContent = symbol;
+    document.querySelectorAll('#coin-alpha-list .coin-item').forEach(x =>
+        x.classList.toggle('selected', x.dataset.symbol === symbol));
+    loadCoinChart();
+}
+
+async function loadCoinChart() {
+    if (!state.coin.symbol) return;
+    document.getElementById('coin-symbol-label').textContent = state.coin.symbol;
+    try {
+        const data = await API.get(`/api/klines/${state.coin.symbol}?interval=${state.coin.tf}&limit=150`);
+        drawCandles(document.getElementById('coin-canvas'), data.candles || [],
+            { symbol: state.coin.symbol, interval: state.coin.tf });
+    } catch (e) {}
+}
+
+function runCoinAnalysis() {
+    const strategy = document.getElementById('sl-strategy').value || 'auto';
+    startAnalysis({
+        symbol: state.coin.symbol,
+        strategy: strategy,
+        timeframe: state.coin.tf,
+        btn: document.getElementById('coin-analyze-btn'),
+        bodyId: 'coin-consensus-body',
+        labelId: 'coin-consensus-symbol',
+        rootId: 'coin-tree-root',
+    });
+}
+
+/* ---------- Live 1-на-1 ---------- */
+function _singleConfig() {
+    let params = {};
+    try { params = JSON.parse(document.getElementById('sl-params').value || '{}'); }
+    catch { toast('Некорректный JSON параметров — применены без параметров'); }
+    return {
+        symbol: state.coin.symbol,
+        timeframe: document.getElementById('sl-timeframe').value,
+        strategy_type: document.getElementById('sl-strategy').value,
+        params,
+        tp_pct: parseFloat(document.getElementById('sl-tp').value),
+        sl_pct: parseFloat(document.getElementById('sl-sl').value),
+        max_hold_hours: parseFloat(document.getElementById('sl-hold').value),
+        max_trades_per_day: parseInt(document.getElementById('sl-max-trades').value),
+        position_size_pct: parseFloat(document.getElementById('sl-pos').value),
+    };
+}
+
+async function singleStart() {
+    try {
+        const cfg = _singleConfig();
+        const r = await API.post('/api/live/single/start', cfg);
+        state.coin.single = r.state;
+        state.coin.syncForm = true;   // форму можно перезаписать свежим конфигом
+        renderSingleState();
+        toast(`🟢 Live по ${cfg.symbol} запущен (${cfg.timeframe})`);
+        log('system', `Live 1-на-1: ${cfg.symbol} ${cfg.timeframe} стратегия=${cfg.strategy_type}`);
+    } catch (e) { toast('❌ ' + e.message); }
+}
+
+async function singleApply() {
+    try {
+        const cfg = _singleConfig();
+        const r = await API.post('/api/live/single/config', cfg);
+        state.coin.single = r.state;
+        state.coin.syncForm = true;
+        renderSingleState();
+        toast(`✔ Настройки применены онлайн (${r.applied.join(', ')})`);
+        log('system', `Live 1-на-1: обновлены настройки → ${r.applied.join(', ')}`);
+    } catch (e) { toast('❌ ' + e.message); }
+}
+
+async function singleStop() {
+    try {
+        const r = await API.post('/api/live/single/stop', {});
+        state.coin.single = r.state;
+        renderSingleState();
+        toast('■ Live по монете остановлен');
+    } catch (e) { toast('❌ ' + e.message); }
+}
+
+async function refreshSingleState() {
+    try {
+        const s = await API.get('/api/live/single/state');
+        state.coin.single = s;
+        renderSingleState();
+    } catch (e) {}
+}
+
+function renderSingleState() {
+    const s = state.coin.single;
+    if (!s) return;
+    const pill = document.getElementById('single-run-pill');
+    if (s.running) {
+        pill.textContent = `🟢 ${s.config.symbol} · ${s.config.timeframe}`;
+        pill.className = 'pill long';
+    } else {
+        pill.textContent = 'выкл';
+        pill.className = 'pill neutral';
+    }
+    // перезаписываем поля формы конфигом сервера только после явного
+    // «Старт»/«Применить» (иначе перетирали бы то, что пользователь вводит)
+    if (s.config && state.coin.syncForm) {
+        state.coin.syncForm = false;
+        const c = s.config;
+        _setVal('sl-tp', c.tp_pct); _setVal('sl-sl', c.sl_pct);
+        _setVal('sl-hold', c.max_hold_hours); _setVal('sl-max-trades', c.max_trades_per_day);
+        _setVal('sl-pos', c.position_size_pct);
+        _setVal('sl-timeframe', c.timeframe);
+        _setVal('sl-strategy', c.strategy_type);
+        if (c.params && Object.keys(c.params).length) {
+            document.getElementById('sl-params').value = JSON.stringify(c.params, null, 2);
+        }
+    }
+    // последний осмотр
+    const ls = document.getElementById('single-last');
+    if (s.last_scan && s.last_scan.ok) {
+        ls.innerHTML =
+            `Последний осмотр: ${s.last_scan.strategy_name || s.last_scan.strategy} → ` +
+            `<b class="${s.last_scan.side === 'LONG' ? 'up' : s.last_scan.side === 'SHORT' ? 'down' : ''}">${s.last_scan.side}</b>` +
+            ` · conf ${fmt((s.last_scan.confidence || 0) * 100, 0)}% · ${fmtPrice(s.last_scan.price)}` +
+            `<br>${escapeHtml(s.last_scan.reason || '')}` +
+            `<br>Сделок сегодня: ${s.day_trades}/${s.day_limit} · win rate ${s.win_rate}%`;
+    } else if (s.last_scan) {
+        ls.textContent = 'Осмотр: ' + (s.last_scan.error || '…');
+    }
+    // сигналы этой сессии
+    const box = document.getElementById('single-signals-list');
+    const acts = s.active || [];
+    const hist = (s.history || []).filter(x => x.status === 'CLOSED').slice(-8).reverse();
+    if (!acts.length && !hist.length) {
+        box.innerHTML = '<div class="empty">Сигналов пока нет</div>';
+        return;
+    }
+    box.innerHTML =
+        acts.map(sg => `
+            <div class="signal-card open" style="padding:9px;margin-bottom:7px">
+                <div class="s-head"><span class="s-symbol" style="font-size:13px">${sg.symbol}</span>
+                    <span class="pill ${sg.side === 'LONG' ? 'long' : 'short'}">${sg.side}</span>
+                    <span class="pill neutral" style="font-size:9px">LIVE</span>
+                    <span class="muted">${fmt(sg.confidence * 100, 0)}%</span></div>
+                <div class="s-levels" style="font-size:11px">
+                    <span>Вход ${fmtPrice(sg.entry)}</span>
+                    <span class="up">TP ${fmtPrice(sg.tp)}</span>
+                    <span class="down">SL ${fmtPrice(sg.sl)}</span>
+                </div>
+            </div>`).join('') +
+        hist.map(sg => `
+            <div class="signal-card" style="padding:9px;margin-bottom:7px;opacity:.8">
+                <div class="s-head"><span class="s-symbol" style="font-size:13px">${sg.symbol}</span>
+                    <span class="pill ${sg.side === 'LONG' ? 'long' : 'short'}">${sg.side}</span>
+                    <span class="muted">${sg.exit_reason}</span>
+                    <span class="${sg.pnl_pct >= 0 ? 'up' : 'down'}">${sg.pnl_pct >= 0 ? '+' : ''}${fmt(sg.pnl_pct)}%</span></div>
+            </div>`).join('');
+}
+
+function _setVal(id, v) {
+    const el = document.getElementById(id);
+    if (el && v !== undefined && v !== null) el.value = v;
+}
+
+/* =========================================================================
    WEBSOCKET события
    ========================================================================= */
 function onWsEvent(data) {
+    const src1v1 = data.signal && data.signal.source === 'single' || data.source === 'single';
     if (data.type === 'signal') {
-        log('signal', `${data.signal.symbol} → ${data.signal.action} (${data.signal.side}, conf ${fmt(data.signal.confidence * 100, 0)}%)`, data.signal.side);
-        renderLiveMini(data.signal);
+        log('signal', `${src1v1 ? '1-на-1 · ' : ''}${data.signal.symbol} → ${data.signal.action} (${data.signal.side}, conf ${fmt(data.signal.confidence * 100, 0)}%)`, data.signal.side);
+        if (!src1v1) renderLiveMini(data.signal);
         refreshLiveState();
+        refreshSingleState();
     } else if (data.type === 'signal_close') {
-        log('system', `${data.signal.symbol}: сигнал закрыт (${data.signal.exit_reason}, ${fmt(data.signal.pnl_pct)}%)`);
+        log('system', `${src1v1 ? '1-на-1 · ' : ''}${data.signal.symbol}: сигнал закрыт (${data.signal.exit_reason}, ${fmt(data.signal.pnl_pct)}%)`);
         refreshLiveState();
+        refreshSingleState();
     } else if (data.type === 'system') {
         log(data.level || 'system', data.message);
     }

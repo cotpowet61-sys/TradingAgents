@@ -85,7 +85,7 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ #
     # 5) Рынок / демо-режим
     # ------------------------------------------------------------------ #
-    DEFAULT_SYMBOLS: str = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,AVAXUSDT,LINKUSDT,ADAUSDT,LTCUSDT"
+    DEFAULT_SYMBOLS: str = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,AVAXUSDT,LINKUSDT,ADAUSDT,LTCUSDT,LSKUSDT"
     DEFAULT_TIMEFRAME: str = "5m"
     SCAN_INTERVAL_SECONDS: int = 30
     AUTO_SCAN: bool = True

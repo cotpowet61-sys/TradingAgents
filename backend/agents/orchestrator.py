@@ -32,8 +32,14 @@ class Orchestrator:
     # Подготовка снимка рынка (общая для analyze и analyze_stream)
     # ------------------------------------------------------------------ #
     async def _prepare(self, symbol: str, strategy_type: str, timeframe: str, params: Optional[dict]):
+        # "auto" — лучшая стратегия для монеты из профиля оптимизатора
+        if strategy_type in (None, "", "auto"):
+            from strategies.selector import get_selector
+            strategy_type = get_selector().best_strategy(symbol, timeframe)
         candles = await self.market.get_klines(symbol, timeframe)
         strategy = build_strategy(strategy_type, params=params)
+        if strategy is None:
+            raise ValueError(f"Неизвестная стратегия: {strategy_type}")
         strat_sig: Optional[Signal] = strategy.generate(candles, len(candles) - 1) if candles else None
         features = ta.compute_feature_summary(candles)
         recent = self._recent_bars(candles, 5)

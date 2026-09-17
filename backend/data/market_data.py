@@ -4,7 +4,14 @@
 Возможности:
   * OHLCV свечи: последние N свечей или произвольный диапазон дат (start/end, мс).
   * Тикеры: для заданных символов или ВСЕ spot-монеты с фильтром по суточному объёму.
+  * Резервный хост api.bytick.com, если api.bybit.com недоступен.
+  * Публичный статус источника данных (Bybit / учебные данные) и self-check ping().
   * Синтетический fallback (демо): детерминированные свечи и тикеры.
+
+ВАЖНО: Bybit V5 принимает интервал свечи ТОЛЬКО в формате
+  1, 3, 5, 15, 30, 60, 120, 240, 360, 720, D, W, M
+Формат вида "5m"/"1h" возвращает retCode=10001 и пустой список —
+поэтому переводим "5m" -> "5", "1h" -> "60", "1d" -> "D".
 """
 from __future__ import annotations
 
@@ -20,6 +27,67 @@ from config import settings
 
 MAX_KLINE_CANDLES = 10000   # защита от гигантских выборок
 _PAGE_LIMIT = 1000          # максимум Bybit на один запрос
+_BACKUP_HOST = "https://api.bytick.com"   # официальное зеркало API Bybit
+
+# Наш формат -> формат Bybit V5
+_BYBIT_INTERVAL_MAP = {
+    "1m": "1", "3m": "3", "5m": "5", "15m": "15", "30m": "30",
+    "1h": "60", "2h": "120", "4h": "240", "6h": "360", "12h": "720",
+    "1d": "D", "1w": "W", "1M": "M",
+}
+
+# Общий статус источника данных (shared по всем экземплярам MarketData)
+_STATUS = {
+    "source": "unknown",      # bybit | synthetic | unknown
+    "bybit_ok": None,         # True/False/None
+    "host": None,             # какой хост ответил последним
+    "last_error": None,       # текст последней ошибки (для диагностики в UI)
+    "checked_at": 0.0,        # unix ts последнего живого ответа
+}
+
+
+def _bybit_interval(interval: str) -> Optional[str]:
+    """"5m" -> "5", "1h" -> "60". Возвращает None, если формат неизвестен."""
+    if not interval:
+        return None
+    if interval in _BYBIT_INTERVAL_MAP:
+        return _BYBIT_INTERVAL_MAP[interval]
+    if interval.isdigit() or interval in ("D", "W", "M"):
+        return interval
+    # "10m" -> "10" (вдруг Bybit знает), "7d" -> нет
+    if interval.endswith("m") and interval[:-1].isdigit():
+        return interval[:-1]
+    return None
+
+
+def data_status() -> dict:
+    """Текущий статус подключения к Bybit (для /api/market/status)."""
+    return {
+        "source": _STATUS["source"],
+        "bybit_ok": _STATUS["bybit_ok"],
+        "host": _STATUS["host"],
+        "last_error": _STATUS["last_error"],
+        "checked_at": _STATUS["checked_at"],
+    }
+
+
+def _mark_live(host: str):
+    _STATUS["bybit_ok"] = True
+    _STATUS["host"] = host
+    _STATUS["source"] = "bybit"
+    _STATUS["last_error"] = None
+    _STATUS["checked_at"] = time.time()
+
+
+def _mark_dead(err: str):
+    _STATUS["bybit_ok"] = False
+    _STATUS["last_error"] = err
+    _STATUS["checked_at"] = time.time()
+
+
+def _mark_synthetic():
+    # Последняя выданная порция данных — учебная (Bybit не ответил/выключен)
+    _STATUS["source"] = "synthetic"
 
 
 @dataclass
@@ -40,16 +108,74 @@ class MarketData:
         self._client: Optional[httpx.AsyncClient] = None
         self._cache: dict = {}          # (symbol, interval) -> (fetched_at, [Candle])
         self._all_tickers_cache: Optional[tuple] = None  # (fetched_at, [dict])
-        self._live_ok: Optional[bool] = None
 
     async def _http(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(timeout=10.0)
+            self._client = httpx.AsyncClient(timeout=8.0)
         return self._client
 
     async def aclose(self):
         if self._client and not self._client.is_closed:
             await self._client.aclose()
+
+    # ------------------------------------------------------------------ #
+    # HTTP к Bybit: основной хост -> резервный (bytick). retCode=0 = успех.
+    # ------------------------------------------------------------------ #
+    def _hosts(self) -> List[str]:
+        hosts = [settings.BYBIT_BASE_URL.rstrip("/")]
+        if _BACKUP_HOST not in hosts:
+            hosts.append(_BACKUP_HOST)
+        return hosts
+
+    async def _get_json(self, path: str, params: dict) -> Optional[dict]:
+        """GET {host}{path}. Возвращает распарсенный JSON при retCode==0, иначе None.
+
+        Сетевые/HTTP ошибки -> пробуем следующий хост.
+        Ошибка параметров (retCode != 0) -> прекращаем (на другом хосте будет то же).
+        """
+        if not settings.DEMO_FALLBACK:
+            return None  # живое подключение отключено настройками — только демо
+        http = await self._http()
+        last_err = "нет соединения"
+        for host in self._hosts():
+            url = host + path
+            try:
+                resp = await http.get(url, params=params)
+            except Exception as e:
+                last_err = f"{host}: {type(e).__name__} {e}"
+                continue
+            if resp.status_code != 200:
+                last_err = f"{host}: HTTP {resp.status_code}"
+                continue
+            try:
+                data = resp.json()
+            except Exception:
+                last_err = f"{host}: некорректный JSON"
+                continue
+            code = data.get("retCode")
+            if code not in (None, 0):
+                # ошибка параметров/символа — на другом хосте будет так же
+                msg = data.get("retMsg") or f"retCode={code}"
+                _mark_dead(f"Bybit API: {msg}")
+                return None
+            _mark_live(host)
+            return data
+        _mark_dead(last_err)
+        return None
+
+    # ------------------------------------------------------------------ #
+    # Диагностика: жив ли Bybit прямо сейчас
+    # ------------------------------------------------------------------ #
+    async def ping(self) -> dict:
+        t0 = time.time()
+        data = await self._get_json("/v5/market/kline", {
+            "category": "spot", "symbol": "BTCUSDT", "interval": "5", "limit": 1})
+        latency = int((time.time() - t0) * 1000)
+        ok = bool(data) and bool(data.get("result", {}).get("list"))
+        status = data_status()
+        status["latency_ms"] = latency
+        status["ok"] = ok
+        return status
 
     # ------------------------------------------------------------------ #
     # Кэш свечей
@@ -85,11 +211,10 @@ class MarketData:
 
         live = await self._fetch_klines_live(symbol, interval, limit)
         if live:
-            self._live_ok = True
             self._cache_set(symbol, interval, live)
             return live
 
-        self._live_ok = False
+        _mark_synthetic()
         candles = synthetic_klines(symbol, interval, limit)
         self._cache_set(symbol, interval, candles)
         return candles
@@ -104,72 +229,64 @@ class MarketData:
 
         live = await self._fetch_klines_live_range(symbol, interval, start, end)
         if live:
-            self._live_ok = True
             return live
 
-        self._live_ok = False
+        _mark_synthetic()
         return synthetic_klines_range(symbol, interval, start, end)
 
     async def _fetch_klines_live(self, symbol: str, interval: str, limit: int) -> Optional[List[Candle]]:
-        if not settings.DEMO_FALLBACK:
+        bint = _bybit_interval(interval)
+        if bint is None:
             return None
-        try:
-            url = settings.BYBIT_BASE_URL.rstrip("/") + "/v5/market/kline"
-            params = {"category": "spot", "symbol": symbol, "interval": interval, "limit": min(limit, 1000)}
-            http = await self._http()
-            resp = await http.get(url, params=params)
-            if resp.status_code != 200:
-                return None
-            rows = resp.json().get("result", {}).get("list", [])
-            if not rows:
-                return None
-            candles = _rows_to_candles(rows)
-            candles.sort(key=lambda c: c.ts)
-            return candles
-        except Exception:
+        data = await self._get_json("/v5/market/kline", {
+            "category": "spot", "symbol": symbol, "interval": bint,
+            "limit": min(limit, 1000)})
+        if not data:
             return None
+        rows = data.get("result", {}).get("list", [])
+        if not rows:
+            return None
+        candles = _rows_to_candles(rows)
+        candles.sort(key=lambda c: c.ts)
+        return candles
 
     async def _fetch_klines_live_range(self, symbol: str, interval: str,
                                        start: int, end: int) -> Optional[List[Candle]]:
         """Пагинация по диапазону дат (до 1000 свечей за запрос)."""
-        if not settings.DEMO_FALLBACK:
+        bint = _bybit_interval(interval)
+        if bint is None:
             return None
-        try:
-            url = settings.BYBIT_BASE_URL.rstrip("/") + "/v5/market/kline"
-            http = await self._http()
-            rows_all: List[list] = []
-            cursor = end
-            for _ in range(12):  # до 12 страниц ≈ 12000 свечей
-                params = {"category": "spot", "symbol": symbol, "interval": interval,
-                          "start": start, "end": cursor, "limit": _PAGE_LIMIT}
-                resp = await http.get(url, params=params)
-                if resp.status_code != 200:
-                    break
-                rows = resp.json().get("result", {}).get("list", [])
-                if not rows:
-                    break
-                rows_all.extend(rows)
-                oldest = min(int(r[0]) for r in rows)
-                if oldest <= start:
-                    break
-                nxt = oldest - 1
-                if nxt >= cursor:
-                    break
-                cursor = nxt
-
-            if not rows_all:
+        rows_all: List[list] = []
+        cursor = end
+        for _ in range(12):  # до 12 страниц ≈ 12000 свечей
+            data = await self._get_json("/v5/market/kline", {
+                "category": "spot", "symbol": symbol, "interval": bint,
+                "start": start, "end": cursor, "limit": _PAGE_LIMIT})
+            if not data:
                 return None
-            candles = []
-            for r in rows_all:
-                ts = int(r[0])
-                if ts < start or ts > end:
-                    continue
-                candles.append(Candle(ts=ts, open=float(r[1]), high=float(r[2]),
-                                      low=float(r[3]), close=float(r[4]), volume=float(r[5])))
-            candles.sort(key=lambda c: c.ts)
-            return candles[:MAX_KLINE_CANDLES] if candles else None
-        except Exception:
+            rows = data.get("result", {}).get("list", [])
+            if not rows:
+                break
+            rows_all.extend(rows)
+            oldest = min(int(r[0]) for r in rows)
+            if oldest <= start:
+                break
+            nxt = oldest - 1
+            if nxt >= cursor:
+                break
+            cursor = nxt
+
+        if not rows_all:
             return None
+        candles = []
+        for r in rows_all:
+            ts = int(r[0])
+            if ts < start or ts > end:
+                continue
+            candles.append(Candle(ts=ts, open=float(r[1]), high=float(r[2]),
+                                  low=float(r[3]), close=float(r[4]), volume=float(r[5])))
+        candles.sort(key=lambda c: c.ts)
+        return candles[:MAX_KLINE_CANDLES] if candles else None
 
     # ------------------------------------------------------------------ #
     # Тикеры
@@ -179,29 +296,22 @@ class MarketData:
         live = await self._fetch_tickers_live(symbols)
         if live:
             return live
+        _mark_synthetic()
         return synthetic_tickers(symbols)
 
     async def _fetch_tickers_live(self, symbols: List[str]) -> Optional[List[dict]]:
-        if not settings.DEMO_FALLBACK:
+        data = await self._get_json("/v5/market/tickers", {"category": "spot"})
+        if not data:
             return None
-        try:
-            url = settings.BYBIT_BASE_URL.rstrip("/") + "/v5/market/tickers"
-            params = {"category": "spot"}
-            http = await self._http()
-            resp = await http.get(url, params=params)
-            if resp.status_code != 200:
-                return None
-            rows = resp.json().get("result", {}).get("list", [])
-            wanted = set(symbols)
-            out = []
-            for r in rows:
-                sym = r.get("symbol")
-                if sym not in wanted:
-                    continue
-                out.append(_ticker_dict(r))
-            return out if out else None
-        except Exception:
-            return None
+        rows = data.get("result", {}).get("list", [])
+        wanted = set(symbols)
+        out = []
+        for r in rows:
+            sym = r.get("symbol")
+            if sym not in wanted:
+                continue
+            out.append(_ticker_dict(r))
+        return out if out else None
 
     # Все spot-монеты с фильтром по суточному объёму
     async def get_all_tickers(self, min_volume_usd: Optional[float] = None) -> List[dict]:
@@ -212,31 +322,23 @@ class MarketData:
 
         live = await self._fetch_all_tickers_live()
         if live:
-            self._live_ok = True
             self._all_tickers_cache = (time.time(), live)
             return [t for t in live if t["volume24h"] >= min_vol]
 
-        self._live_ok = False
+        _mark_synthetic()
         synthetic = synthetic_tickers(settings.symbols)
         return [t for t in synthetic if t["volume24h"] >= min_vol]
 
     async def _fetch_all_tickers_live(self) -> Optional[List[dict]]:
-        if not settings.DEMO_FALLBACK:
+        data = await self._get_json("/v5/market/tickers", {"category": "spot"})
+        if not data:
             return None
-        try:
-            url = settings.BYBIT_BASE_URL.rstrip("/") + "/v5/market/tickers"
-            http = await self._http()
-            resp = await http.get(url, params={"category": "spot"})
-            if resp.status_code != 200:
-                return None
-            rows = resp.json().get("result", {}).get("list", [])
-            out = []
-            for r in rows:
-                out.append(_ticker_dict(r))
-            out.sort(key=lambda x: -x["volume24h"])
-            return out if out else None
-        except Exception:
-            return None
+        rows = data.get("result", {}).get("list", [])
+        out = []
+        for r in rows:
+            out.append(_ticker_dict(r))
+        out.sort(key=lambda x: -x["volume24h"])
+        return out if out else None
 
 
 def _ticker_dict(r: dict) -> dict:

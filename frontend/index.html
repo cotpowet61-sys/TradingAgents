@@ -18,6 +18,7 @@
     </div>
     <nav class="nav" id="nav">
         <button class="nav-btn active" data-tab="dashboard">Дашборд</button>
+        <button class="nav-btn" data-tab="coin">🎯 Монета</button>
         <button class="nav-btn" data-tab="strategies">Стратегии</button>
         <button class="nav-btn" data-tab="backtest">Бэктест</button>
         <button class="nav-btn" data-tab="live">Live-сигналы</button>
@@ -25,8 +26,9 @@
         <button class="nav-btn" data-tab="settings">Настройки</button>
     </nav>
     <div class="status-group">
+        <span id="data-badge" class="badge data-src" title="Источник рыночных данных">данные…</span>
         <span id="conn-status" class="conn-status offline"><span class="dot"></span>офлайн</span>
-        <span id="demo-badge" class="badge">DEMO</span>
+        <span id="demo-badge" class="badge" title="DEMO = ИИ-агенты без API-ключа (торговые сигналы при этом считаются индикаторами и работают всегда)">AI DEMO</span>
     </div>
 </header>
 
@@ -43,17 +45,18 @@
 
         <main class="card chart-card">
             <div class="chart-toolbar">
-                <select id="chart-symbol"></select>
+                <select id="chart-symbol" class="symbol-select"></select>
                 <div class="tf-group" id="tf-group"></div>
                 <div class="tf-group" id="chart-mode-group" style="margin-left:6px">
                     <button id="candles-toggle" class="tf-btn active">🕯 Свечи</button>
                     <button id="tv-toggle" class="tf-btn">📺 TradingView</button>
                 </div>
                 <div class="spacer"></div>
+                <span id="chart-data-src" class="badge data-src" title="Источник данных графика">—</span>
                 <button id="analyze-btn" class="btn btn-primary">🤖 Анализ агентов</button>
             </div>
             <div id="tradingview-chart"></div>
-            <div id="chart-fallback" class="chart-fallback" style="display:none;">
+            <div id="chart-fallback" class="chart-fallback">
                 <canvas id="candles-canvas"></canvas>
             </div>
         </main>
@@ -80,6 +83,93 @@
         <div class="card live-mini">
             <div class="card-head"><h2>🟢 Последние сигналы</h2></div>
             <div class="card-body" id="live-mini-list"><div class="empty">—</div></div>
+        </div>
+    </div>
+</section>
+
+<!-- ============ COIN: работа с одной монетой (Bybit) ============ -->
+<section class="panel" id="panel-coin">
+    <div class="dash-grid">
+        <aside class="card coins-card">
+            <div class="card-head">
+                <h2>🪙 Монеты Bybit</h2>
+                <button id="coin-refresh" class="btn btn-ghost btn-sm">⟳</button>
+            </div>
+            <div class="card-body">
+                <input type="text" id="coin-filter" class="filter-input" placeholder="Поиск: BTC, LSK…">
+                <div id="coin-alpha-list" class="coin-alpha"><div class="empty">Загрузка…</div></div>
+            </div>
+        </aside>
+
+        <main class="card chart-card">
+            <div class="chart-toolbar">
+                <span id="coin-symbol-label" class="coin-label">—</span>
+                <div class="tf-group" id="coin-tf-group"></div>
+                <div class="spacer"></div>
+                <button id="coin-analyze-btn" class="btn btn-primary">🤖 Анализ агентов</button>
+            </div>
+            <div class="chart-fallback" style="display:flex">
+                <canvas id="coin-canvas"></canvas>
+            </div>
+        </main>
+
+        <aside class="card">
+            <div class="card-head">
+                <h2>🟢 Live 1-на-1</h2>
+                <span id="single-run-pill" class="pill neutral">выкл</span>
+            </div>
+            <div class="card-body">
+                <form id="single-form" class="form">
+                    <label>Стратегия
+                        <select id="sl-strategy">
+                            <option value="auto">⚡ Авто — лучшая для монеты</option>
+                        </select>
+                    </label>
+                    <div class="params-box">
+                        <label class="muted">Параметры стратегии (JSON, необязательно)</label>
+                        <textarea id="sl-params" rows="2" spellcheck="false">{}</textarea>
+                    </div>
+                    <div style="display:flex;gap:10px">
+                        <label style="flex:1">TP, % <input type="number" id="sl-tp" value="2.0" step="0.1" min="2"></label>
+                        <label style="flex:1">SL, % <input type="number" id="sl-sl" value="1.0" step="0.1" min="0.1"></label>
+                    </div>
+                    <div style="display:flex;gap:10px">
+                        <label style="flex:1">Макс. удержание, ч <input type="number" id="sl-hold" value="4" step="0.5" min="0.1" max="4"></label>
+                        <label style="flex:1">Сделок/день (≤30) <input type="number" id="sl-max-trades" value="10" min="1" max="30"></label>
+                    </div>
+                    <div style="display:flex;gap:10px">
+                        <label style="flex:1">Размер позиции, % <input type="number" id="sl-pos" value="10" min="1" max="100"></label>
+                        <label style="flex:1">ТФ сигналов
+                            <select id="sl-timeframe">
+                                <option>1m</option><option>3m</option><option selected>5m</option>
+                                <option>15m</option><option>30m</option><option>1h</option><option>4h</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" id="single-start" class="btn btn-primary" style="flex:1">▶ Старт по монете</button>
+                        <button type="button" id="single-apply" class="btn btn-ghost" style="flex:1">✔ Применить онлайн</button>
+                        <button type="button" id="single-stop" class="btn btn-ghost">■</button>
+                    </div>
+                </form>
+                <div id="single-last" class="muted" style="margin-top:8px;font-size:11px"></div>
+            </div>
+        </aside>
+    </div>
+
+    <div class="consensus-row">
+        <div class="card consensus-card">
+            <div class="card-head">
+                <h2>🧠 Анализ агентов по монете</h2>
+                <span id="coin-consensus-symbol" class="muted"></span>
+            </div>
+            <div class="card-body" id="coin-consensus-body">
+                <div class="empty">Выберите монету слева и нажмите «Анализ агентов»</div>
+            </div>
+        </div>
+        <div class="card live-mini">
+            <div class="card-head"><h2>⚡ Сигналы 1-на-1</h2></div>
+            <div class="card-body" id="single-signals-list"><div class="empty">—</div></div>
         </div>
     </div>
 </section>
@@ -151,12 +241,11 @@
                             <option>15m</option><option>30m</option><option>1h</option><option>4h</option>
                         </select>
                     </label>
-                    <label>Кол-во свечей <input type="number" id="bt-limit" value="500" min="50" max="2000"></label>
                     <div style="display:flex;gap:10px">
                         <label style="flex:1">Период с (дата) <input type="date" id="bt-start"></label>
                         <label style="flex:1">Период по (дата) <input type="date" id="bt-end"></label>
                     </div>
-                    <p class="muted">Если заданы даты — они заменяют «кол-во свечей». Пусто = последние свечи.</p>
+                    <p class="muted">Объём данных считается автоматически из периода и таймфрейма. Без дат — последние 24 часа.</p>
                     <label>Take-Profit, % <input type="number" id="bt-tp" value="2.0" step="0.1" min="2"></label>
                     <label>Stop-Loss, % <input type="number" id="bt-sl" value="1.0" step="0.1" min="0.1"></label>
                     <label>Макс. удержание, ч <input type="number" id="bt-hold" value="4" step="0.5" min="0.1"></label>

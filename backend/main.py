@@ -15,6 +15,7 @@ import asyncio
 import datetime
 import json
 import os
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
@@ -26,13 +27,14 @@ from typing import Optional, List
 import uvicorn
 
 from config import settings, ENV_PATH, ENV_EXAMPLE_PATH
-from data.market_data import MarketData
+from data.market_data import MarketData, data_status
 from strategies.registry import build_strategy, STRATEGY_SCHEMAS
 from strategies.selector import get_selector
 from backtest.engine import run_backtest
 from agents.orchestrator import get_orchestrator
 from agents import roles
 from live.engine import get_live_engine
+from live.single import get_single_engine
 from llm.client import get_client
 
 
@@ -45,6 +47,7 @@ async def lifespan(app: FastAPI):
     await live.start()
     yield
     await live.stop()
+    await get_single_engine().stop()
 
 
 app = FastAPI(title="TradingAgents", version="2.0.0", lifespan=lifespan)
@@ -129,7 +132,22 @@ async def market_symbols(min_volume_usd: Optional[float] = None):
 async def klines(symbol: str, interval: str = Query(default=None), limit: int = Query(default=300)):
     candles = await market.get_klines(symbol, interval, limit)
     return {"symbol": symbol, "interval": interval or settings.DEFAULT_TIMEFRAME,
+            "data_source": data_status()["source"],
             "candles": [c.to_dict() for c in candles]}
+
+
+@app.get("/api/market/status")
+async def market_status():
+    """Источник данных: bybit | synthetic — бейдж в шапке фронта."""
+    st = data_status()
+    st["demo_fallback"] = settings.DEMO_FALLBACK
+    return st
+
+
+@app.post("/api/market/ping")
+async def market_ping():
+    """Живая проверка соединения с Bybit (пробует основной и резервный хост)."""
+    return await market.ping()
 
 
 # ---------------------------------------------------------------------- #
@@ -139,13 +157,12 @@ class BacktestRequest(BaseModel):
     symbol: str
     strategy: str = "momentum_breakout"
     timeframe: str = "5m"
-    limit: int = 500
     params: Optional[dict] = None
     tp_pct: Optional[float] = None
     sl_pct: Optional[float] = None
     max_hold_hours: Optional[float] = None
     # Диапазон дат (необязательно). Формат "YYYY-MM-DD".
-    # Если заданы — используются вместо limit.
+    # Без дат — автоматически последние 24 часа.
     start_date: Optional[str] = None
     end_date: Optional[str] = None
 
@@ -161,18 +178,30 @@ def _parse_date(s: Optional[str]) -> Optional[int]:
         return None
 
 
+def _date_range(start_date: Optional[str], end_date: Optional[str]) -> tuple:
+    """Выбор периода бэктеста. Без дат -> последние 24 часа.
+
+    Количество свечей больше не задаётся вручную: объём данных вычисляется
+    автоматически из периода и таймфрейма (range-запрос к Bybit с пагинацией).
+    """
+    start_ts = _parse_date(start_date)
+    end_ts = _parse_date(end_date)
+    if end_ts:
+        end_ts += 86_400_000 - 1  # включить весь конечный день
+    if start_ts is None and end_ts is None:
+        now = int(time.time() * 1000)
+        start_ts, end_ts = now - 86_400_000, now   # последние 24 часа
+    return start_ts, end_ts
+
+
 @app.post("/api/backtest")
 async def backtest(req: BacktestRequest):
     strategy = build_strategy(req.strategy, req.params, req.tp_pct, req.sl_pct, req.max_hold_hours)
     if strategy is None:
         raise HTTPException(404, f"Стратегия '{req.strategy}' не найдена")
 
-    start_ts = _parse_date(req.start_date)
-    end_ts = _parse_date(req.end_date)
-    if end_ts:
-        end_ts += 86_400_000 - 1  # включить весь конечный день
-
-    candles = await market.get_klines(req.symbol, req.timeframe, req.limit, start_ts, end_ts)
+    start_ts, end_ts = _date_range(req.start_date, req.end_date)
+    candles = await market.get_klines(req.symbol, req.timeframe, None, start_ts, end_ts)
     if not candles:
         raise HTTPException(400, "Нет данных для бэктеста в заданном диапазоне")
 
@@ -184,6 +213,7 @@ async def backtest(req: BacktestRequest):
     out["max_hold_hours"] = strategy.max_hold_hours
     out["start_date"] = req.start_date
     out["end_date"] = req.end_date
+    out["data_source"] = data_status()["source"]
     # Свечи для отрисовки сделок на графике (не более 400 — для скорости)
     chart_candles = candles[-400:]
     out["candles"] = [c.to_dict() for c in chart_candles]
@@ -201,7 +231,6 @@ async def backtest(req: BacktestRequest):
 class BacktestAllRequest(BaseModel):
     symbol: str
     timeframe: str = "5m"
-    limit: int = 500
     tp_pct: Optional[float] = None
     sl_pct: Optional[float] = None
     max_hold_hours: Optional[float] = None
@@ -211,12 +240,8 @@ class BacktestAllRequest(BaseModel):
 
 @app.post("/api/backtest/all")
 async def backtest_all(req: BacktestAllRequest):
-    start_ts = _parse_date(req.start_date)
-    end_ts = _parse_date(req.end_date)
-    if end_ts:
-        end_ts += 86_400_000 - 1
-
-    candles = await market.get_klines(req.symbol, req.timeframe, req.limit, start_ts, end_ts)
+    start_ts, end_ts = _date_range(req.start_date, req.end_date)
+    candles = await market.get_klines(req.symbol, req.timeframe, None, start_ts, end_ts)
     if not candles:
         raise HTTPException(400, "Нет данных для бэктеста в заданном диапазоне")
 
@@ -263,6 +288,7 @@ async def backtest_all(req: BacktestAllRequest):
         "sl_pct": sl_pct,
         "start_date": req.start_date,
         "end_date": req.end_date,
+        "data_source": data_status()["source"],
         "best": best,
         "results": results,
     }
@@ -274,7 +300,6 @@ async def backtest_all(req: BacktestAllRequest):
 class OptimizeRequest(BaseModel):
     symbol: str
     timeframe: str = "5m"
-    limit: int = 500
     min_trades: int = 10
     min_win_rate: float = 55.0
     top_n: int = 5
@@ -285,13 +310,12 @@ class OptimizeRequest(BaseModel):
 @app.post("/api/optimize")
 async def optimize(req: OptimizeRequest):
     selector = get_selector()
-    start_ts = _parse_date(req.start_date)
-    end_ts = _parse_date(req.end_date)
-    if end_ts:
-        end_ts += 86_400_000 - 1
-    return await selector.optimize(req.symbol, req.timeframe, req.limit,
-                                   req.min_trades, req.min_win_rate, req.top_n,
-                                   start_ts=start_ts, end_ts=end_ts)
+    start_ts, end_ts = _date_range(req.start_date, req.end_date)
+    out = await selector.optimize(req.symbol, req.timeframe, 1000,
+                                  req.min_trades, req.min_win_rate, req.top_n,
+                                  start_ts=start_ts, end_ts=end_ts)
+    out["data_source"] = data_status()["source"]
+    return out
 
 
 @app.get("/api/optimize/profiles")
@@ -340,6 +364,53 @@ async def scan(req: Optional[ScanRequest] = None,
 @app.get("/api/live/state")
 async def live_state():
     return get_live_engine().state()
+
+
+# ---------------------------------------------------------------------- #
+# Live 1-на-1: сигналы только по одной выбранной монете.
+# Работает параллельно с общим live-движком; настройки меняются онлайн.
+# ---------------------------------------------------------------------- #
+class SingleConfigBody(BaseModel):
+    symbol: Optional[str] = None
+    timeframe: Optional[str] = None
+    strategy_type: Optional[str] = None       # "auto" или type из /api/strategies
+    params: Optional[dict] = None
+    tp_pct: Optional[float] = None
+    sl_pct: Optional[float] = None
+    max_hold_hours: Optional[float] = None
+    max_trades_per_day: Optional[int] = None
+    position_size_pct: Optional[float] = None
+    min_confidence: Optional[float] = None
+
+
+@app.get("/api/live/single/state")
+async def single_state():
+    return get_single_engine().state()
+
+
+@app.post("/api/live/single/start")
+async def single_start(body: SingleConfigBody):
+    eng = get_single_engine()
+    if body.symbol is None:
+        raise HTTPException(400, "Укажите symbol")
+    applied = eng.apply_config(body.dict(exclude_none=True))
+    await eng.start()
+    return {"ok": True, "applied": applied, "state": eng.state()}
+
+
+@app.post("/api/live/single/stop")
+async def single_stop():
+    eng = get_single_engine()
+    await eng.stop()
+    return {"ok": True, "state": eng.state()}
+
+
+@app.post("/api/live/single/config")
+async def single_config(body: SingleConfigBody):
+    """Онлайн-применение настроек (без остановки цикла)."""
+    eng = get_single_engine()
+    applied = eng.apply_config(body.dict(exclude_none=True))
+    return {"ok": True, "applied": applied, "state": eng.state()}
 
 
 # ---------------------------------------------------------------------- #
