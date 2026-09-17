@@ -141,6 +141,7 @@ class LiveEngine:
                         return
                     # персонализация под вашу историю (ДНК; 0 токенов)
                     fit = None
+                    tp2, sl2, rr_free = sig.tp, sig.sl, False
                     try:
                         from trade_context import fit_score, _regime
                         dna = self._fresh_dna()
@@ -148,17 +149,32 @@ class LiveEngine:
                         regime = _regime([c.close for c in candles])
                         fit = fit_score(dna, sym, sig.side.value,
                                         rsi=(summ or {}).get("rsi"), regime=regime)
+                        # Правило 2/1 снято → цели по волатильности графика (ATR)
+                        if not settings.RR_BINDING:
+                            atr_pct = (summ or {}).get("atr_pct") or 0.0
+                            if atr_pct > 0 and sig.entry:
+                                tp_move = min(6.0, max(0.4, 2.0 * atr_pct))
+                                sl_move = min(4.0, max(0.25, 1.2 * atr_pct))
+                                e = sig.entry
+                                if sig.side.value == "LONG":
+                                    tp2 = e * (1 + tp_move / 100)
+                                    sl2 = e * (1 - sl_move / 100)
+                                else:
+                                    tp2 = e * (1 - tp_move / 100)
+                                    sl2 = e * (1 + sl_move / 100)
+                                rr_free = True
                     except Exception:
                         fit = None
                     event = {
                         "fit": fit,
+                        "rr_free": rr_free,
                         "type": "signal",
                         "symbol": sym,
                         "timeframe": tf,
                         "side": sig.side.value,
                         "price": sig.entry,
-                        "tp": sig.tp,
-                        "sl": sig.sl,
+                        "tp": tp2,
+                        "sl": sl2,
                         "confidence": sig.confidence,
                         "strategy": strat.name,
                         "strategy_auto": stype is not None and settings.SIGNAL_STRATEGY in (None, "", "auto"),

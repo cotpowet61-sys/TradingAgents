@@ -79,6 +79,9 @@ class PortalSettings(BaseSettings):
     # Звук/всплывашки хранятся на клиенте, но дефолты можно задать здесь
     NOTIFY_SOUND: bool = True
     NOTIFY_TOASTS: bool = True
+    # Привязка правила TP≥2% / SL 1% (RR 2:1) к live-сигналам.
+    # False = цели считаются по ATR свежего графика (сигналы «дышат» под волу).
+    RR_BINDING: bool = True
 
     # Правила дэйтрейдинга (для отображения и контекста агентов)
     MAX_TRADES_PER_DAY: int = 30
@@ -144,6 +147,7 @@ class PortalSettings(BaseSettings):
                 "signal_strategy": self.SIGNAL_STRATEGY,
                 "notify_sound": self.NOTIFY_SOUND,
                 "notify_toasts": self.NOTIFY_TOASTS,
+                "rr_binding": self.RR_BINDING,
             },
             "rules": {
                 "max_trades_per_day": self.MAX_TRADES_PER_DAY,
@@ -169,6 +173,7 @@ class PortalSettings(BaseSettings):
         "signal_strategy": ("SIGNAL_STRATEGY", "SIGNAL_STRATEGY"),
         "notify_sound": ("NOTIFY_SOUND", "NOTIFY_SOUND"),
         "notify_toasts": ("NOTIFY_TOASTS", "NOTIFY_TOASTS"),
+        "rr_binding": ("RR_BINDING", "RR_BINDING"),
         "model_strategist": ("MODEL_STRATEGIST", "MODEL_STRATEGIST"),
         "model_momentum": ("MODEL_MOMENTUM", "MODEL_MOMENTUM"),
         "model_contrarian": ("MODEL_CONTRARIAN", "MODEL_CONTRARIAN"),

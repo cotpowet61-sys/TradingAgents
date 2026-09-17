@@ -121,9 +121,10 @@ async def _get(path: str, params: dict) -> dict:
                     data = r.json()
                     if data.get("retCode") == 0:
                         return data.get("result") or {}
-                    last_err = BybitAuthError(f"Bybit: {data.get('retMsg')} (код {data.get('retCode')})")
-                    continue
-                last_err = BybitAuthError(f"Bybit: {msg} (код {rc})")
+                    raise BybitAuthError(f"Bybit: {data.get('retMsg')} (код {data.get('retCode')})")
+                # Любая другая логическая ошибка API одинакова на всех хостах —
+                # сразу показываем её как есть (это НЕ сеть).
+                raise BybitAuthError(f"Bybit API: {msg} (код {rc})")
             except BybitAuthError:
                 raise
             except Exception as e:
@@ -137,38 +138,37 @@ async def _get(path: str, params: dict) -> dict:
 
 
 async def fetch_executions(days: int = 90, category: str = "linear", max_pages: int = 10) -> List[dict]:
-    """История исполнений (fills) за период. limit<=100, пагинация курсором."""
-    end = int(time.time() * 1000)
-    start = end - days * 24 * 3600 * 1000
-    out: List[dict] = []
-    cursor = None
-    for _ in range(max_pages):
-        res = await _get("/v5/execution/list", {
-            "category": category, "startTime": start, "endTime": end,
-            "limit": 100, "cursor": cursor,
-        })
-        out.extend(res.get("list") or [])
-        cursor = res.get("nextPageCursor")
-        if not cursor:
-            break
-    return out
+    """История исполнений (fills) за период. Лимит Bybit — окно ≤7 дней,
+    поэтому период нарезается на 6.9-дневные окна."""
+    return await _fetch_windowed("/v5/execution/list", days, category, max_pages)
 
 
 async def fetch_closed_pnl(days: int = 90, category: str = "linear", max_pages: int = 10) -> List[dict]:
-    """Закрытые позиции с PnL (главный источник для статистики)."""
+    """Закрытые позиции с PnL (главный источник для статистики).
+    Окно запроса у Bybit — не более 7 дней: нарезаем период."""
+    return await _fetch_windowed("/v5/position/closed-pnl", days, category, max_pages)
+
+
+async def _fetch_windowed(path: str, days: int, category: str, max_pages_per_window: int) -> List[dict]:
+    days = max(1, min(days, 400))
     end = int(time.time() * 1000)
-    start = end - days * 24 * 3600 * 1000
+    start_all = end - days * 86_400_000
+    win = int(6.9 * 86_400_000)  # чуть меньше лимита Bybit (7 дней)
     out: List[dict] = []
-    cursor = None
-    for _ in range(max_pages):
-        res = await _get("/v5/position/closed-pnl", {
-            "category": category, "startTime": start, "endTime": end,
-            "limit": 100, "cursor": cursor,
-        })
-        out.extend(res.get("list") or [])
-        cursor = res.get("nextPageCursor")
-        if not cursor:
-            break
+    w_end = float(end)
+    while w_end > start_all:
+        w_start = max(float(start_all), w_end - win)
+        cursor = None
+        for _ in range(max_pages_per_window):
+            res = await _get(path, {
+                "category": category, "startTime": int(w_start), "endTime": int(w_end),
+                "limit": 100, "cursor": cursor,
+            })
+            out.extend(res.get("list") or [])
+            cursor = res.get("nextPageCursor")
+            if not cursor:
+                break
+        w_end = w_start
     return out
 
 

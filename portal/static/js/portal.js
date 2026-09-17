@@ -107,6 +107,7 @@ function connectWS() {
             state.feed = state.feed.slice(-60);
             renderFeed();
             renderWatchlist(d);
+            if (window.neuroFlash) window.neuroFlash(d.side === 'LONG' ? 'long' : 'short');
             if ($('ntf-toasts').checked) {
                 toast(`<b>${d.symbol}</b> → <b style="color:var(--${d.side === 'LONG' ? 'long' : 'short'})">${d.side}</b><br>
                        <span style="color:var(--muted)">${esc(d.strategy)} · conf ${fmt(d.confidence * 100, 0)}% · ${fmtPx(d.price)}</span>`,
@@ -134,10 +135,28 @@ function renderWatchlist(flash) {
                 <div class="chg ${chg >= 0 ? 'up' : 'down'}">${chg >= 0 ? '+' : ''}${fmt(chg)}%</div>
             </div>
             <div class="px">${p ? fmtPx(p.last) : '—'}</div>
+            <button class="rm" title="Убрать из watchlist" data-rm="${sym}">✕</button>
         </div>`;
     }).join('');
     box.querySelectorAll('.watch-card').forEach(el =>
         el.addEventListener('click', () => selectSymbol(el.dataset.symbol)));
+    // кнопки «✕» — удалить монету из watchlist (сразу сохраняется)
+    box.querySelectorAll('button.rm').forEach(btn =>
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const sym = btn.dataset.rm;
+            try {
+                const wl = ((state.config && state.config.live.watchlist) || []).filter(x => x !== sym);
+                const res = await API.post('/api/config', { updates: { watchlist: wl.join(',') } });
+                state.config = res.config;
+                _wl = [...res.config.live.watchlist];
+                renderWLEdit(_wl);
+                renderWatchlist();
+                toast(`🗑 ${sym} убран из watchlist`);
+            } catch (err) {
+                toast('❌ ' + err.message);
+            }
+        }));
 }
 
 function selectSymbol(sym) {
@@ -278,7 +297,7 @@ function signalCardHTML(s) {
             <span><b>TP</b><span style="color:var(--long)">${fmtPx(s.tp)}</span></span>
             <span><b>SL</b><span style="color:var(--short)">${fmtPx(s.sl)}</span></span>
         </div>
-        <div class="sc-strat">${esc(s.strategy)}${s.strategy_auto ? ' · <span class="auto">⚡ авто-подбор по графику</span>' : ''} · TF ${s.timeframe}</div>
+        <div class="sc-strat">${esc(s.strategy)}${s.strategy_auto ? ' · <span class="auto">⚡ авто-подбор по графику</span>' : ''} · TF ${s.timeframe}${s.rr_free ? ' · <span style="color:var(--cyan)">TP/SL по ATR графика</span>' : ''}</div>
         ${s.reason ? `<div class="sc-strat" style="opacity:.8">${esc(s.reason)}</div>` : ''}
         <div class="conf-bar"><i style="width:${confPct}%"></i></div>
     </div>`;
@@ -766,6 +785,7 @@ function renderSettings(cfg) {
     $('set-sl').value = cfg.rules.default_sl_pct;
     $('ntf-sound').checked = cfg.live.notify_sound;
     $('ntf-toasts').checked = cfg.live.notify_toasts;
+    const rr = $('set-rr-binding'); if (rr) rr.checked = cfg.live.rr_binding !== false;
 
     const sel = $('set-signal-strategy');
     if (![...sel.options].some(o => o.value === cfg.live.signal_strategy)) {
@@ -835,6 +855,7 @@ function collectUpdates() {
     u.default_sl_pct = parseFloat(v('set-sl')) || 1;
     u.notify_sound = $('ntf-sound').checked ? 'true' : 'false';
     u.notify_toasts = $('ntf-toasts').checked ? 'true' : 'false';
+    const rr = $('set-rr-binding'); if (rr) u.rr_binding = rr.checked ? 'true' : 'false';
     document.querySelectorAll('.role-row').forEach(row => {
         const role = row.dataset.role;
         u['model_' + role] = row.querySelector('.rr-model').value;
