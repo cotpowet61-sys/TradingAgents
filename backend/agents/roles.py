@@ -91,8 +91,27 @@ def build_prompt(role_key: str, snapshot: dict) -> list[dict]:
     ]
 
 
+def _disabled_verdict(role_key: str) -> dict:
+    """Заглушка для выключенного агента (токены не расходуются вообще)."""
+    return {
+        "side": "NEUTRAL",
+        "confidence": 0.0,
+        "reason": "Агент выключен пользователем (токены не расходуются)",
+        "risks": [],
+        "thinking": [],
+        "key_levels": {"support": None, "resistance": None},
+        "tokens_est": {"prompt": 0, "completion": 0, "total": 0},
+        "disabled": True,
+    }
+
+
 async def get_agent_verdict(role_key: str, snapshot: dict) -> dict:
-    """Получить вердикт агента. В демо-режиме — детерминированный результат."""
+    """Получить вердикт агента. В демо-режиме — детерминированный результат.
+    Выключенный агент (AGENT_<ROLE>_ENABLED=false в настройках) не вызывается
+    вообще — ни токены, ни время не тратятся; возвращается заглушка."""
+    from config import settings as _s
+    if not _s.agent_enabled(role_key):
+        return _disabled_verdict(role_key)
     client = get_client()
     messages = build_prompt(role_key, snapshot)
     try:

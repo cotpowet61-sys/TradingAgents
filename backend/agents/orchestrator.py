@@ -65,21 +65,35 @@ class Orchestrator:
             "icon": roles.ROLES[role_key].icon,
             "model": settings.model_role(role_key)["model"],
             "demo": settings.model_role(role_key)["api_key"] == "",
+            "enabled": settings.agent_enabled(role_key),
             **verdict,
         }
+
+    @staticmethod
+    def _stub_verdicts(reason: str) -> dict:
+        """Заглушки для всех ролей (0 токенов) — индикаторный режим."""
+        return {k: {"side": "NEUTRAL", "confidence": 0.0, "reason": reason,
+                    "risks": [], "thinking": [],
+                    "key_levels": {"support": None, "resistance": None},
+                    "disabled": True} for k in ("strategist", "momentum", "contrarian", "macro", "risk")}
 
     # ------------------------------------------------------------------ #
     # Анализ одного символа
     # ------------------------------------------------------------------ #
     async def analyze(self, symbol: str, strategy_type: str = "momentum_breakout",
-                      timeframe: str = None, params: Optional[dict] = None) -> dict:
+                      timeframe: str = None, params: Optional[dict] = None,
+                      use_agents: bool = True) -> dict:
         timeframe = timeframe or settings.DEFAULT_TIMEFRAME
         candles, strategy, strat_sig, features, snapshot = await self._prepare(
             symbol, strategy_type, timeframe, params)
 
         keys = ["strategist", "momentum", "contrarian", "macro", "risk"]
-        results = await asyncio.gather(*(roles.get_agent_verdict(k, snapshot) for k in keys))
-        verdicts = dict(zip(keys, results))
+        if use_agents:
+            results = await asyncio.gather(*(roles.get_agent_verdict(k, snapshot) for k in keys))
+            verdicts = dict(zip(keys, results))
+        else:
+            # авто-анализ LLM выключен — фоновый сканер только по индикаторам (0 токенов)
+            verdicts = self._stub_verdicts("Авто-анализ моделей выключен (включается в Настройках/вкладке Монета)")
 
         consensus = self._consensus(verdicts, strat_sig)
         final = self._finalize(symbol, timeframe, strat_sig, consensus)
@@ -157,9 +171,13 @@ class Orchestrator:
         total_w = 0.0
         detail = {}
         for k, v in verdicts.items():
+            conf = v.get("confidence", 0.0)
+            if v.get("disabled"):
+                # выключенный тумблером агент: голос и вес полностью исключаем
+                detail[k] = {"side": "NEUTRAL", "confidence": 0.0, "disabled": True}
+                continue
             w = weights.get(k, 1.0)
             total_w += w
-            conf = v.get("confidence", 0.0)
             if v.get("side") == "LONG":
                 long_score += conf * w
                 w_dir += w
@@ -243,6 +261,8 @@ class Orchestrator:
     # ------------------------------------------------------------------ #
     # Скан всего рынка. strategy_type="auto" — подбирает лучшую стратегию
     # для каждой монеты из профиля оптимизатора (адаптивный режим).
+    # LLM-агенты вызываются только если AGENTS_AUTO_ANALYSIS=true — иначе
+    # фоновый сканер работает чисто на индикаторах (токены не тратятся).
     # ------------------------------------------------------------------ #
     async def scan_market(self, symbols: Optional[List[str]] = None,
                           strategy_type: str = "auto",
@@ -251,6 +271,7 @@ class Orchestrator:
         symbols = symbols or settings.symbols
         timeframe = timeframe or settings.DEFAULT_TIMEFRAME
         selector = get_selector()
+        use_agents = bool(settings.AGENTS_AUTO_ANALYSIS)
 
         # Ограничиваем параллелизм, чтобы не перегружать API
         sem = asyncio.Semaphore(4)
@@ -261,7 +282,7 @@ class Orchestrator:
                     st = strategy_type
                     if st in (None, "", "auto"):
                         st = selector.best_strategy(sym, timeframe)
-                    return await self.analyze(sym, st, timeframe)
+                    return await self.analyze(sym, st, timeframe, use_agents=use_agents)
                 except Exception as e:
                     return {"symbol": sym, "error": str(e), "signal": {"side": "NEUTRAL", "action": "WAIT"}}
 

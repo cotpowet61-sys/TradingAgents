@@ -339,6 +339,23 @@ table.data tr:hover td { background: rgba(255, 255, 255, 0.03); }
 .agent-pill .dot.active { background: var(--green); box-shadow: 0 0 8px var(--green); }
 .agent-pill .dot.thinking { background: var(--amber); animation: pulse 1s infinite; }
 
+/* ---------- Agent toggles (экономия токенов) ---------- */
+.agent-toggles { margin-top: 6px; }
+.agent-chip-list { display: flex; flex-direction: column; gap: 5px; }
+.agent-chip {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    padding: 7px 10px; border-radius: 9px; cursor: pointer;
+    background: rgba(108,140,255,.07); border: 1px solid rgba(108,140,255,.18);
+    color: var(--text); font-size: 12.5px; text-align: left;
+    transition: background .15s, border-color .15s, opacity .15s;
+}
+.agent-chip:hover { background: rgba(108,140,255,.14); border-color: rgba(108,140,255,.4); }
+.agent-chip.off { opacity: .55; background: rgba(255,255,255,.03); border-color: rgba(255,255,255,.08); }
+.agent-chip .chip-state { margin-left: auto; font-size: 10.5px; font-family: var(--mono); color: var(--green); }
+.agent-chip.off .chip-state { color: var(--muted); }
+.chk { display: flex; align-items: center; gap: 7px; cursor: pointer; font-size: 12.5px; color: var(--text); user-select: none; }
+.chk input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--blue); cursor: pointer; }
+
 /* ---------- Animations ---------- */
 @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }

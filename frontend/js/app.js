@@ -186,6 +186,7 @@ async function loadSettings() {
         const cfg = await API.get('/api/config');
         state.config = cfg;
         renderSettings(cfg);
+        renderAgentToggles(cfg);
     } catch (e) {
         document.getElementById('settings-body').innerHTML =
             `<div class="empty" style="color:var(--red)">Ошибка загрузки настроек: ${e.message}</div>`;
@@ -204,11 +205,28 @@ function renderSettings(cfg) {
             </div>
             <input type="text" class="role-model" value="${escapeHtml(r.model)}" placeholder="модель (напр. gpt-6-astra)">
             <input type="password" class="role-key" value="${escapeHtml(r.api_key)}" placeholder="ключ (пусто = глобальный)">
+            <label class="chk" title="выкл = агент не вызывает AI, токены не тратятся">
+                <input type="checkbox" class="role-enabled" ${r.enabled ? 'checked' : ''}> вкл
+            </label>
             <span class="role-status wait">—</span>
         </div>`;
     }).join('');
 
     box.innerHTML = `
+        <div class="settings-section">
+            <h3>⏯️ Экономия токенов (авто-анализ)</h3>
+            <div class="kv-row"><label>Фоновый сканер с AI-агентами</label>
+                <label class="chk"><input type="checkbox" id="set-auto-analysis" ${cfg.agents && cfg.agents.auto_analysis ? 'checked' : ''}> включён</label>
+            </div>
+            <p class="muted" style="margin-top:4px">
+                <b>ВЫКЛ (рекомендуется):</b> фоновый мониторинг всех монет работает только на
+                математических индикаторах — <b>токены AI не тратятся вообще</b>, сигналы и авто-сделки продолжают работать.
+                Агенты вызываются только когда <b>вы сами</b> нажимаете «🤖 Анализ агентов» на конкретной монете.
+                ВКЛ — сканер спрашивает все 5 моделей по каждой монете каждый цикл: <b>очень быстро сжигает лимиты токенов</b>.
+            </p>
+            <p class="muted" style="margin-top:4px">ℹ️ Файл <code>.env</code> хранит ваши ключи и создаётся автоматически при первом запуске
+            (его нет в архиве специально — чтобы ключи не утекли). Если файл удалили — при старте создастся новый пустой, просто введите ключи заново и нажмите «Сохранить».</p>
+        </div>
         <div class="settings-section">
             <h3>🔑 AI-подключение (endpoint)</h3>
             <div class="kv-row"><label>Base URL</label><input type="text" id="set-base-url" value="${escapeHtml(cfg.base_url)}"></div>
@@ -322,9 +340,14 @@ async function saveSettings() {
         const role = row.dataset.role;
         const model = row.querySelector('.role-model').value.trim();
         const key = row.querySelector('.role-key').value.trim();
+        const en = row.querySelector('.role-enabled');
         if (model) updates[role + '_model'] = model;
         if (key && !key.includes('…')) updates[role + '_api_key'] = key;
+        if (en) updates['agent_' + role + '_enabled'] = en.checked ? 'true' : 'false';
     });
+
+    const autoChk = document.getElementById('set-auto-analysis');
+    if (autoChk) updates.agents_auto_analysis = autoChk.checked ? 'true' : 'false';
 
     updates.max_trades_per_day = parseInt(val('set-max-trades')) || 30;
     updates.min_tp_pct = parseFloat(val('set-min-tp')) || 2;
@@ -647,6 +670,8 @@ function onSnapshot(d) {
     document.getElementById(treeTarget.labelId).textContent =
         `${d.symbol} · ${d.timeframe} · цена ${fmtPrice(d.price)} · стратегия: ${d.strategy.name}`;
     const sig = d.strategy_signal;
+    const nEnabled = (state.config && state.config.roles) ? state.config.roles.filter(r => r.enabled).length : 5;
+    const thinkTxt = nEnabled > 0 ? `${nEnabled} ${plural(nEnabled,'агент','агента','агентов')} размышляют…` : 'все агенты выключены — только индикаторы';
     root.insertAdjacentHTML('beforeend', `
         <div class="tree-branch">
             <div class="tree-agent" style="opacity:.75">
@@ -660,7 +685,7 @@ function onSnapshot(d) {
                 </div>
             </div>
         </div>
-        <div class="thinking-indicator"><span class="pulse"></span>5 агентов размышляют…</div>
+        <div class="thinking-indicator"><span class="pulse"></span>${thinkTxt}</div>
     `);
 }
 
@@ -670,6 +695,25 @@ function onAgentVerdict(a) {
     // убираем индикатор загрузки
     root.querySelectorAll('.thinking-indicator').forEach(el => el.remove());
     const steps = (a.thinking || []).map(s => `<div class="t-step">${escapeHtml(s)}</div>`).join('');
+    if (a.disabled) {
+        // выключенный тумблером агент — AI не вызывался, токены не потрачены
+        root.insertAdjacentHTML('beforeend', `
+            <div class="tree-branch">
+                <div class="tree-agent" style="opacity:.55">
+                    <span class="t-icon">${a.icon}</span>
+                    <div style="flex:1">
+                        <div style="display:flex;justify-content:space-between;align-items:center">
+                            <span class="t-name">${a.name}</span>
+                            <span class="muted" style="font-size:10px">⏸ отключён</span>
+                        </div>
+                        <div class="a-reason" style="margin-top:4px">Агент выключен тумблером — AI не вызывался, токены не потрачены.</div>
+                    </div>
+                </div>
+            </div>
+        `);
+        root.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        return;
+    }
     root.insertAdjacentHTML('beforeend', `
         <div class="tree-branch">
             <div class="tree-agent">
@@ -1385,6 +1429,75 @@ function log(kind, message, side) {
 
 function escapeHtml(s) {
     return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+function plural(n, one, few, many) {
+    const m = Math.abs(n) % 100, d = m % 10;
+    if (m > 10 && m < 20) return many;
+    if (d > 1 && d < 5) return few;
+    if (d === 1) return one;
+    return many;
+}
+
+/* ---------- Тумблеры агентов (вкладка «Монета») ---------- */
+function renderAgentToggles(cfg) {
+    const box = document.getElementById('agent-toggles');
+    if (!box) return;
+    const auto = cfg.agents && cfg.agents.auto_analysis;
+    const chips = cfg.roles.map(r => {
+        const m = ROLE_META[r.key] || { icon: '🤖', name: r.key };
+        const on = r.enabled !== false;
+        return `
+        <button type="button" class="agent-chip ${on ? 'on' : 'off'}" data-role="${r.key}"
+                title="${on ? 'Агент включён — нажмите, чтобы выключить (перестанет тратить токены)' : 'Агент выключен — токены не тратятся. Нажмите, чтобы включить'}">
+            <span>${m.icon}</span><span>${m.name}</span>
+            <span class="chip-state">${on ? 'вкл' : '⏸ выкл'}</span>
+        </button>`;
+    }).join('');
+    box.innerHTML = `
+        <div class="agent-chip-list">${chips}</div>
+        <label class="chk" style="margin-top:8px;display:flex" title="ВКЛ = фоновый сканер спрашивает AI по всем монетам каждый цикл (быстро сжигает токены)">
+            <input type="checkbox" id="coin-auto-analysis" ${auto ? 'checked' : ''}>
+            <span>Фоновый сканер с AI <span class="muted">(расход токенов)</span></span>
+        </label>
+        <div class="muted" style="font-size:11px;margin-top:4px">
+            Выключенные агенты не вызывают AI — токены не тратятся. Ручной «🤖 Анализ агентов» по кнопке работает всегда.
+        </div>
+    `;
+    box.querySelectorAll('.agent-chip').forEach(btn => {
+        btn.addEventListener('click', () => toggleAgent(btn.dataset.role));
+    });
+    const autoChk = document.getElementById('coin-auto-analysis');
+    if (autoChk) autoChk.addEventListener('change', () => toggleAutoAnalysis(autoChk.checked));
+}
+
+async function toggleAgent(role) {
+    const cur = state.config && state.config.roles ? state.config.roles.find(r => r.key === role) : null;
+    const next = !(cur && cur.enabled !== false);
+    const m = ROLE_META[role] || { name: role };
+    try {
+        const res = await API.post('/api/config', { updates: { ['agent_' + role + '_enabled']: next ? 'true' : 'false' } });
+        state.config = res.config;
+        renderAgentToggles(res.config);
+        toast(`${m.icon} ${m.name}: ${next ? 'включён' : '⏸ выключен — токены больше не тратятся'}`);
+        log('system', `Агент ${role}: ${next ? 'вкл' : 'выкл'}`);
+    } catch (e) {
+        toast('❌ Не удалось переключить агента: ' + e.message);
+    }
+}
+
+async function toggleAutoAnalysis(on) {
+    try {
+        const res = await API.post('/api/config', { updates: { agents_auto_analysis: on ? 'true' : 'false' } });
+        state.config = res.config;
+        renderAgentToggles(res.config);
+        toast(on
+            ? '⚠️ Фоновый сканер теперь вызывает AI-агентов — следите за расходом токенов'
+            : '✅ Фоновый сканер работает на индикаторах — AI-токены не тратятся');
+        log('system', `Авто-анализ агентами: ${on ? 'вкл' : 'выкл (0 токенов)'}`);
+    } catch (e) {
+        toast('❌ Не удалось переключить: ' + e.message);
+    }
 }
 
 /* ---------- Мини-список сигналов ---------- */

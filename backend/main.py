@@ -26,7 +26,7 @@ from typing import Optional, List
 
 import uvicorn
 
-from config import settings, ENV_PATH, ENV_EXAMPLE_PATH
+from config import settings, ENV_PATH, ENV_EXAMPLE_PATH, ensure_env_file
 from data.market_data import MarketData, data_status, symbol_category
 from strategies.registry import build_strategy, STRATEGY_SCHEMAS
 from strategies.selector import get_selector
@@ -43,6 +43,7 @@ from llm.client import get_client
 # ---------------------------------------------------------------------- #
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    ensure_env_file()   # воссоздать .env из .env.example, если файла нет
     live = get_live_engine()
     await live.start()
     yield

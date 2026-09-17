@@ -74,6 +74,20 @@ class Settings(BaseSettings):
     RISK_BASE_URL: str = ""
 
     # ------------------------------------------------------------------ #
+    # Управление ИИ-агентами / расход токенов.
+    # AGENTS_AUTO_ANALYSIS=false (по умолчанию): live-сканер НЕ вызывает LLM,
+    # сигналы считаются индикаторами (0 токенов). Ручной «Анализ агентов»
+    # по кнопке работает всегда. Каждого агента можно выключать отдельно —
+    # отключённый не вызывается и токены не тратит.
+    # ------------------------------------------------------------------ #
+    AGENTS_AUTO_ANALYSIS: bool = False
+    AGENT_STRATEGIST_ENABLED: bool = True
+    AGENT_MOMENTUM_ENABLED: bool = True
+    AGENT_CONTRARIAN_ENABLED: bool = True
+    AGENT_MACRO_ENABLED: bool = True
+    AGENT_RISK_ENABLED: bool = True
+
+    # ------------------------------------------------------------------ #
     # 4) Риск-менеджмент и правила дэйтрейдинга
     # ------------------------------------------------------------------ #
     MAX_TRADES_PER_DAY: int = 30
@@ -135,6 +149,10 @@ class Settings(BaseSettings):
         provider = "anthropic" if model.startswith("anthropic/") else "openai"
         return {"provider": provider, "model": model, "api_key": key, "base_url": base_url}
 
+    def agent_enabled(self, role: str) -> bool:
+        """Разрешён ли вызов агента (индивидуальный тумблер)."""
+        return bool(getattr(self, f"AGENT_{role.upper()}_ENABLED", True))
+
     def is_demo(self) -> bool:
         return not any(self.model_role(r)["api_key"] for r in self.ROLE_KEYS)
 
@@ -153,9 +171,14 @@ class Settings(BaseSettings):
                     "has_key": bool(self.model_role(r)["api_key"]),
                     "api_key": _mask(self.model_role(r)["api_key"]),
                     "base_url": self.model_role(r)["base_url"],
+                    "enabled": self.agent_enabled(r),
                 }
                 for r in self.ROLE_KEYS
             ],
+            "agents": {
+                "auto_analysis": self.AGENTS_AUTO_ANALYSIS,
+                "enabled": {r: self.agent_enabled(r) for r in self.ROLE_KEYS},
+            },
             "bybit": {
                 "api_key": _mask(self.BYBIT_API_KEY),
                 "has_key": bool(self.BYBIT_API_KEY),
@@ -205,6 +228,12 @@ class Settings(BaseSettings):
         "macro_api_key": ("MACRO_API_KEY", "MACRO_API_KEY"),
         "risk_model": ("RISK_MODEL", "RISK_MODEL"),
         "risk_api_key": ("RISK_API_KEY", "RISK_API_KEY"),
+        "agents_auto_analysis": ("AGENTS_AUTO_ANALYSIS", "AGENTS_AUTO_ANALYSIS"),
+        "agent_strategist_enabled": ("AGENT_STRATEGIST_ENABLED", "AGENT_STRATEGIST_ENABLED"),
+        "agent_momentum_enabled": ("AGENT_MOMENTUM_ENABLED", "AGENT_MOMENTUM_ENABLED"),
+        "agent_contrarian_enabled": ("AGENT_CONTRARIAN_ENABLED", "AGENT_CONTRARIAN_ENABLED"),
+        "agent_macro_enabled": ("AGENT_MACRO_ENABLED", "AGENT_MACRO_ENABLED"),
+        "agent_risk_enabled": ("AGENT_RISK_ENABLED", "AGENT_RISK_ENABLED"),
         "max_trades_per_day": ("MAX_TRADES_PER_DAY", "MAX_TRADES_PER_DAY"),
         "min_tp_pct": ("MIN_TP_PCT", "MIN_TP_PCT"),
         "max_hold_hours": ("MAX_HOLD_HOURS", "MAX_HOLD_HOURS"),
@@ -295,3 +324,19 @@ def _persist_env(updates: Dict[str, str]) -> None:
 
 
 settings = Settings()
+
+
+def ensure_env_file() -> None:
+    """Создаёт .env из .env.example, если файла нет (например, после
+    распаковки свежего ZIP). Ключи остаются пустыми до ввода пользователем —
+    но сам файл уже на месте, и «Сохранить» в Настройках сработает мгновенно."""
+    if not os.path.exists(ENV_PATH):
+        try:
+            if os.path.exists(ENV_EXAMPLE_PATH):
+                import shutil
+                shutil.copyfile(ENV_EXAMPLE_PATH, ENV_PATH)
+            else:
+                open(ENV_PATH, "w", encoding="utf-8").close()
+            print(f"[config] создан .env: {ENV_PATH}")
+        except Exception as e:
+            print(f"[config] не удалось создать .env: {e}")
