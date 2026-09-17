@@ -268,7 +268,16 @@ function _bybitConnLabel(s) {
     if (s.bybit_ok) {
         el.innerHTML = `<span class="up">✓ Bybit отвечает</span> (${s.host || 'api.bybit.com'}${s.latency_ms != null ? ', ' + s.latency_ms + ' мс' : ''})`;
     } else {
-        el.innerHTML = `<span class="down">✗ недоступен</span> — показаны учебные данные${s.last_error ? ' · <span class="muted">' + escapeHtml(s.last_error).slice(0, 90) + '</span>' : ''}`;
+        let html = `<span class="down">✗ недоступен</span> — показаны учебные данные`;
+        if (s.results && s.results.length) {
+            html += '<br>' + s.results.map(r =>
+                `<span class="${r.ok ? 'up' : 'down'}">${r.ok ? '✓' : '✗'}</span> ` +
+                `${r.host.replace('https://', '')} — ${escapeHtml(r.detail || 'ok')} (${r.latency_ms} мс)`
+            ).join('<br>');
+        } else if (s.last_error) {
+            html += ' · <span class="muted">' + escapeHtml(s.last_error).slice(0, 90) + '</span>';
+        }
+        el.innerHTML = html;
     }
 }
 
@@ -283,7 +292,7 @@ async function pingBybit() {
             toast(`✅ Bybit доступен: ${s.host} (${s.latency_ms} мс). Реальные данные!`);
             refreshTickers(); loadCanvasCandles();
         } else {
-            toast('❌ Bybit недоступен с этого компьютера. Проверьте интернет/VPN.');
+            toast('❌ Все хосты Bybit недоступны. Возможный geo-block — попробуйте VPN.');
         }
     } catch (e) {
         toast('❌ Ошибка проверки: ' + e.message);

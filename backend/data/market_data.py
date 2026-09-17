@@ -27,7 +27,12 @@ from config import settings
 
 MAX_KLINE_CANDLES = 10000   # защита от гигантских выборок
 _PAGE_LIMIT = 1000          # максимум Bybit на один запрос
-_BACKUP_HOST = "https://api.bytick.com"   # официальное зеркало API Bybit
+
+# Резервные хосты API Bybit. api2.bybit.com использует сам веб-сайт bybit.com —
+# поэтому если сайт открывается в браузере, а api.bybit.com заблокирован
+# (CloudFront country block), этот хост, как правило, работает.
+# bytick.com — официальное зеркало API, bybit.eu — EEA/NL регион Bybit.
+_BACKUP_HOSTS = ["https://api2.bybit.com", "https://api.bytick.com", "https://api.bybit.eu"]
 
 # Наш формат -> формат Bybit V5
 _BYBIT_INTERVAL_MAP = {
@@ -119,38 +124,47 @@ class MarketData:
             await self._client.aclose()
 
     # ------------------------------------------------------------------ #
-    # HTTP к Bybit: основной хост -> резервный (bytick). retCode=0 = успех.
+    # HTTP к Bybit: основной хост -> резервные. retCode=0 = успех.
     # ------------------------------------------------------------------ #
     def _hosts(self) -> List[str]:
         hosts = [settings.BYBIT_BASE_URL.rstrip("/")]
-        if _BACKUP_HOST not in hosts:
-            hosts.append(_BACKUP_HOST)
+        for h in _BACKUP_HOSTS:
+            if h not in hosts:
+                hosts.append(h)
         return hosts
 
     async def _get_json(self, path: str, params: dict) -> Optional[dict]:
         """GET {host}{path}. Возвращает распарсенный JSON при retCode==0, иначе None.
 
-        Сетевые/HTTP ошибки -> пробуем следующий хост.
-        Ошибка параметров (retCode != 0) -> прекращаем (на другом хосте будет то же).
+        Сетевые/HTTP ошибки -> пробуем следующий резервный хост.
+        Ошибка параметров (retCode != 0) -> прекращаем (на другом хосте будет то же),
+        КРОМЕ случая "запрещено для страны" (geo-block) — тогда пробуем зеркало.
         """
         if not settings.DEMO_FALLBACK:
             return None  # живое подключение отключено настройками — только демо
         http = await self._http()
+        # коды, при которых стоит попробовать следующий хост (geo-block / ratelimit)
+        _retry_codes = (401, 403, 429)
         last_err = "нет соединения"
+        errors = []
         for host in self._hosts():
             url = host + path
             try:
                 resp = await http.get(url, params=params)
             except Exception as e:
-                last_err = f"{host}: {type(e).__name__} {e}"
+                errors.append(f"{host.replace('https://','')}: {type(e).__name__}")
                 continue
             if resp.status_code != 200:
-                last_err = f"{host}: HTTP {resp.status_code}"
+                if resp.status_code in _retry_codes:
+                    # возможный geo-block CloudFront — full diagnostic дальше
+                    errors.append(f"{host.replace('https://','')}: HTTP {resp.status_code} (geo-block?)")
+                else:
+                    errors.append(f"{host.replace('https://','')}: HTTP {resp.status_code}")
                 continue
             try:
                 data = resp.json()
             except Exception:
-                last_err = f"{host}: некорректный JSON"
+                errors.append(f"{host.replace('https://','')}: некорректный JSON")
                 continue
             code = data.get("retCode")
             if code not in (None, 0):
@@ -160,21 +174,58 @@ class MarketData:
                 return None
             _mark_live(host)
             return data
+        last_err = "; ".join(errors) if errors else "нет соединения"
         _mark_dead(last_err)
         return None
 
     # ------------------------------------------------------------------ #
-    # Диагностика: жив ли Bybit прямо сейчас
+    # Диагностика: жив ли Bybit прямо сейчас. Пробуем КАЖДЫЙ хост отдельно
+    # и возвращаем всю картину (для кнопки «Проверить Bybit» в UI).
     # ------------------------------------------------------------------ #
     async def ping(self) -> dict:
-        t0 = time.time()
-        data = await self._get_json("/v5/market/kline", {
-            "category": "spot", "symbol": "BTCUSDT", "interval": "5", "limit": 1})
-        latency = int((time.time() - t0) * 1000)
-        ok = bool(data) and bool(data.get("result", {}).get("list"))
+        results = []
+        http = await self._http()
+        for host in self._hosts():
+            t0 = time.time()
+            detail = ""
+            ok = False
+            try:
+                resp = await http.get(host + "/v5/market/kline",
+                                      params={"category": "spot", "symbol": "BTCUSDT",
+                                              "interval": "5", "limit": 1})
+                if resp.status_code != 200:
+                    detail = f"HTTP {resp.status_code}"
+                else:
+                    data = resp.json()
+                    code = data.get("retCode")
+                    if code not in (None, 0):
+                        detail = f"retCode={code}: {data.get('retMsg', '')}"
+                    elif not data.get("result", {}).get("list"):
+                        detail = "пустой ответ"
+                    else:
+                        ok = True
+            except Exception as e:
+                detail = f"{type(e).__name__}: {e}"
+            latency = int((time.time() - t0) * 1000)
+            results.append({
+                "host": host,
+                "ok": ok,
+                "latency_ms": latency,
+                "detail": detail,
+            })
+        ok_all = next((r for r in results if r["ok"]), None)
+        if ok_all:
+            _mark_live(ok_all["host"])
+        else:
+            _mark_dead("; ".join(
+                f"{r['host'].replace('https://', '')}: {r['detail'] or 'HTTP err'}"
+                for r in results))
         status = data_status()
-        status["latency_ms"] = latency
-        status["ok"] = ok
+        status["results"] = results
+        status["ok"] = bool(ok_all)
+        if ok_all:
+            status["latency_ms"] = ok_all["latency_ms"]
+            status["host"] = ok_all["host"]
         return status
 
     # ------------------------------------------------------------------ #
