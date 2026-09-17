@@ -261,8 +261,11 @@ class MarketData:
             return cached[-limit:]
 
         live = await self._fetch_klines_live(symbol, interval, limit)
-        if live:
-            self._cache_set(symbol, interval, live)
+        if live is not None:
+            # [] = API ответил, но данных нет (монета исключена с Bybit) —
+            # НЕ подменяем синтетикой: честно отдаём пустой список
+            if live:
+                self._cache_set(symbol, interval, live)
             return live
 
         _mark_synthetic()
@@ -279,13 +282,15 @@ class MarketData:
             start = end - _interval_ms(interval)
 
         live = await self._fetch_klines_live_range(symbol, interval, start, end)
-        if live:
+        if live is not None:
             return live
 
         _mark_synthetic()
         return synthetic_klines_range(symbol, interval, start, end)
 
     async def _fetch_klines_live(self, symbol: str, interval: str, limit: int) -> Optional[List[Candle]]:
+        """None = API недоступен (fallback в синтетику).
+        []    = API ответил, но данных нет (монета исключена с Bybit — не подделываем)."""
         bint = _bybit_interval(interval)
         if bint is None:
             return None
@@ -296,7 +301,7 @@ class MarketData:
             return None
         rows = data.get("result", {}).get("list", [])
         if not rows:
-            return None
+            return []     # биржа сказала: такой пары нет / нет данных
         candles = _rows_to_candles(rows)
         candles.sort(key=lambda c: c.ts)
         return candles
@@ -309,12 +314,14 @@ class MarketData:
             return None
         rows_all: List[list] = []
         cursor = end
+        got_answer = False
         for _ in range(12):  # до 12 страниц ≈ 12000 свечей
             data = await self._get_json("/v5/market/kline", {
                 "category": "spot", "symbol": symbol, "interval": bint,
                 "start": start, "end": cursor, "limit": _PAGE_LIMIT})
             if not data:
                 return None
+            got_answer = True
             rows = data.get("result", {}).get("list", [])
             if not rows:
                 break
@@ -328,7 +335,8 @@ class MarketData:
             cursor = nxt
 
         if not rows_all:
-            return None
+            # API отвечал, но данных нет — пара отсутствует на Bybit
+            return [] if got_answer else None
         candles = []
         for r in rows_all:
             ts = int(r[0])

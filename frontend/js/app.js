@@ -524,8 +524,14 @@ function createTvWidget() {
 async function loadCanvasCandles() {
     try {
         const data = await API.get(`/api/klines/${state.currentSymbol}?interval=${state.currentTF}&limit=150`);
-        drawCandles(document.getElementById('candles-canvas'), data.candles || [],
-            { symbol: state.currentSymbol, interval: state.currentTF });
+        const canvas = document.getElementById('candles-canvas');
+        if (data.hint) {
+            _drawChartNotice(canvas, '⛔ ' + data.hint);
+            toast(data.hint);
+        } else {
+            drawCandles(canvas, data.candles || [],
+                { symbol: state.currentSymbol, interval: state.currentTF });
+        }
         const src = document.getElementById('chart-data-src');
         if (src) {
             const isBB = (data.data_source || state.dataSource) === 'bybit';
@@ -533,6 +539,29 @@ async function loadCanvasCandles() {
             src.className = 'badge data-src ' + (isBB ? 'ok' : 'warn');
         }
     } catch (e) {}
+}
+
+/* Сообщение вместо графика (делистинг / нет данных) */
+function _drawChartNotice(canvas, text) {
+    if (!canvas) return;
+    const ctx = setupCanvas(canvas);
+    ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+    ctx.fillStyle = '#8b98ad';
+    ctx.font = '13px sans-serif';
+    ctx.textAlign = 'center';
+    // перенос длинного текста по словам
+    const words = text.split(' ');
+    const lines = [];
+    let line = '';
+    const maxW = canvas.clientWidth * 0.8;
+    for (const w of words) {
+        const t = line ? line + ' ' + w : w;
+        if (ctx.measureText(t).width > maxW) { lines.push(line); line = w; }
+        else line = t;
+    }
+    if (line) lines.push(line);
+    const cy = canvas.clientHeight / 2 - (lines.length - 1) * 9;
+    lines.forEach((l, i) => ctx.fillText(l, canvas.clientWidth / 2, cy + i * 18));
 }
 
 function switchSymbol() {
@@ -1073,13 +1102,14 @@ function renderCoinList() {
     box.innerHTML = list.map(t => {
         const cls = t.change24h >= 0 ? 'up' : 'down';
         const sign = t.change24h >= 0 ? '+' : '';
+        const noData = !t.last;
         return `
             <div class="coin-item ${t.symbol === state.coin.symbol ? 'selected' : ''}" data-symbol="${t.symbol}">
                 <div>
-                    <div class="coin-name">${t.symbol}</div>
+                    <div class="coin-name">${t.symbol}${noData ? ' <span class="badge data-src warn" style="font-size:8px;padding:0 4px">нет на Bybit</span>' : ''}</div>
                     <div class="coin-change ${cls}">${sign}${fmt(t.change24h)}%</div>
                 </div>
-                <div class="coin-last">${t.last ? fmtPrice(t.last) : '—'}</div>
+                <div class="coin-last">${noData ? 'делистинг' : fmtPrice(t.last)}</div>
             </div>`;
     }).join('');
     box.querySelectorAll('.coin-item').forEach(el => {
@@ -1100,8 +1130,13 @@ async function loadCoinChart() {
     document.getElementById('coin-symbol-label').textContent = state.coin.symbol;
     try {
         const data = await API.get(`/api/klines/${state.coin.symbol}?interval=${state.coin.tf}&limit=150`);
-        drawCandles(document.getElementById('coin-canvas'), data.candles || [],
-            { symbol: state.coin.symbol, interval: state.coin.tf });
+        const canvas = document.getElementById('coin-canvas');
+        if (data.hint) {
+            _drawChartNotice(canvas, '⛔ ' + data.hint);
+        } else {
+            drawCandles(canvas, data.candles || [],
+                { symbol: state.coin.symbol, interval: state.coin.tf });
+        }
     } catch (e) {}
 }
 

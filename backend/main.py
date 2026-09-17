@@ -131,8 +131,13 @@ async def market_symbols(min_volume_usd: Optional[float] = None):
 @app.get("/api/klines/{symbol}")
 async def klines(symbol: str, interval: str = Query(default=None), limit: int = Query(default=300)):
     candles = await market.get_klines(symbol, interval, limit)
+    src = data_status()
+    empty = not candles
     return {"symbol": symbol, "interval": interval or settings.DEFAULT_TIMEFRAME,
-            "data_source": data_status()["source"],
+            "data_source": src["source"],
+            "empty": empty,
+            "hint": (f"На Bybit нет данных по {symbol} — вероятно, пара снята с торгов (делистинг)."
+                     if empty and src["bybit_ok"] else None),
             "candles": [c.to_dict() for c in candles]}
 
 
@@ -194,6 +199,13 @@ def _date_range(start_date: Optional[str], end_date: Optional[str]) -> tuple:
     return start_ts, end_ts
 
 
+def _no_data_msg(symbol: str) -> str:
+    if data_status()["bybit_ok"]:
+        return (f"На Bybit нет данных по {symbol}: пара не торгуется "
+                f"(делистинг) или нет истории. Выберите другую монету.")
+    return "Нет данных для бэктеста в заданном диапазоне"
+
+
 @app.post("/api/backtest")
 async def backtest(req: BacktestRequest):
     strategy = build_strategy(req.strategy, req.params, req.tp_pct, req.sl_pct, req.max_hold_hours)
@@ -203,7 +215,7 @@ async def backtest(req: BacktestRequest):
     start_ts, end_ts = _date_range(req.start_date, req.end_date)
     candles = await market.get_klines(req.symbol, req.timeframe, None, start_ts, end_ts)
     if not candles:
-        raise HTTPException(400, "Нет данных для бэктеста в заданном диапазоне")
+        raise HTTPException(400, _no_data_msg(req.symbol))
 
     result = run_backtest(strategy, candles, req.timeframe, req.max_hold_hours)
     result.symbol = req.symbol
@@ -243,7 +255,7 @@ async def backtest_all(req: BacktestAllRequest):
     start_ts, end_ts = _date_range(req.start_date, req.end_date)
     candles = await market.get_klines(req.symbol, req.timeframe, None, start_ts, end_ts)
     if not candles:
-        raise HTTPException(400, "Нет данных для бэктеста в заданном диапазоне")
+        raise HTTPException(400, _no_data_msg(req.symbol))
 
     # tp/sl применяются одинаково ко всем стратегиям
     tp_pct = req.tp_pct if req.tp_pct is not None else settings.MIN_TP_PCT
