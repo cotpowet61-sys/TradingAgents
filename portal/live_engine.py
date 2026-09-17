@@ -20,6 +20,7 @@ from portal_config import settings
 from council import get_market
 from strategies.registry import build_strategy
 from strategies.selector import get_selector
+from strategies import indicators as ta
 
 MAX_FEED = 60
 
@@ -32,6 +33,20 @@ class LiveEngine:
         self.running = False
         self._task: Optional[asyncio.Task] = None
         self.last_scan: Optional[float] = None
+        self._dna = None
+        self._dna_mtime = 0.0
+
+    def _fresh_dna(self):
+        """ДНК трейдера с диска (перечитываем при обновлении файла)."""
+        try:
+            from trade_context import load_dna, dna_mtime
+            mt = dna_mtime()
+            if mt and mt != self._dna_mtime:
+                self._dna = load_dna()
+                self._dna_mtime = mt
+        except Exception:
+            pass
+        return self._dna
 
     # ------------------------------------------------------------------ #
     # WS-хаб
@@ -124,7 +139,19 @@ class LiveEngine:
                         return
                     if sig.confidence < settings.MIN_CONFIDENCE:
                         return
+                    # персонализация под вашу историю (ДНК; 0 токенов)
+                    fit = None
+                    try:
+                        from trade_context import fit_score, _regime
+                        dna = self._fresh_dna()
+                        summ = ta.compute_feature_summary(candles) or {}
+                        regime = _regime([c.close for c in candles])
+                        fit = fit_score(dna, sym, sig.side.value,
+                                        rsi=(summ or {}).get("rsi"), regime=regime)
+                    except Exception:
+                        fit = None
                     event = {
+                        "fit": fit,
                         "type": "signal",
                         "symbol": sym,
                         "timeframe": tf,

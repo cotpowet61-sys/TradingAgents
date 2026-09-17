@@ -69,9 +69,15 @@ def normalize_csv(text: str) -> List[dict]:
         exitp = pick("exit price", "avg exit price", "avgexitprice", "close price")
         qty = pick("qty", "quantity", "size", "closed size", "filled qty")
         cts = pick("closed time", "updated time", "close time", "date", "time")
+        ots = pick("created time", "created at", "open time", "opened time", "created")
         if not sym:
             continue
         side = "Buy" if side_raw in ("buy", "long", "лонг") else "Sell" if side_raw in ("sell", "short", "шорт") else ""
+        close_ts = _parse_ts(cts)
+        open_ts = _parse_ts(ots)
+        if close_ts and not open_ts:
+            # по одному таймстемпу удержание неизвестно — оценка 2ч для обогащения графиком
+            open_ts = close_ts - 2 * 3600_000
         trades.append({
             "symbol": sym,
             "side": side,
@@ -79,8 +85,8 @@ def normalize_csv(text: str) -> List[dict]:
             "entry": _f(entry),
             "exit": _f(exitp),
             "pnl": _f(pnl),
-            "open_ts": None,
-            "close_ts": _parse_ts(cts),
+            "open_ts": open_ts,
+            "close_ts": close_ts,
             "leverage": 1.0,
             "source": "csv",
         })
@@ -219,6 +225,7 @@ def _brief(t: dict) -> dict:
     return {
         "symbol": t["symbol"], "side": t["side"], "pnl": round(t["pnl"], 2),
         "entry": t["entry"], "exit": t["exit"],
+        "open_ts": t.get("open_ts"), "close_ts": t.get("close_ts"),
         "closed": _fmt_ts(t.get("close_ts")),
     }
 

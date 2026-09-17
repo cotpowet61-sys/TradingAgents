@@ -115,6 +115,30 @@ def _disabled_verdict(role: str) -> dict:
     }
 
 
+def _persona_addendum() -> str:
+    """Краткая выжимка AI-персоны трейдера — добавляется в промпт каждого агента."""
+    try:
+        from trade_context import load_persona
+        p = load_persona()
+        if not p:
+            return ""
+        merged = p.get("merged") or {}
+        ess = merged.get("essence") or ""
+        avoid = "; ".join(merged.get("avoid", [])[:4])
+        hints = "; ".join(merged.get("signal_hints", [])[:4])
+        if not (ess or avoid or hints):
+            return ""
+        return (
+            "\n\nПРОФИЛЬ ТРЕЙДЕРА (построен по его реальной истории сделок — "
+            "учитывай при оценке рисков и уверенности):\n"
+            f"Суть: {ess}\n"
+            + (f"Опасные для него зоны: {avoid}\n" if avoid else "")
+            + (f"Ему подходят сигналы: {hints}\n" if hints else "")
+        )[:1400]
+    except Exception:
+        return ""
+
+
 async def get_verdict(role: str, snapshot: dict) -> dict:
     """Вердикт одного агента: уважает тумблеры и наличие ключа Портала."""
     if not settings.role_enabled(role):
@@ -123,6 +147,9 @@ async def get_verdict(role: str, snapshot: dict) -> dict:
         return _demo_verdict(role, snapshot)
 
     messages = backend_roles.build_prompt(role, snapshot)
+    persona = _persona_addendum()
+    if persona:
+        messages[1]["content"] += persona
     try:
         text = await chat(role, messages, json_mode=True)
         verdict = parse_json_verdict(text)

@@ -148,7 +148,8 @@ function selectSymbol(sym) {
 }
 
 /* ---------- График (Lightweight Charts) ---------- */
-let chart = null, candleSeries = null, volSeries = null;
+let chart = null, candleSeries = null, volSeries = null, mainMarkers = null;
+const TF_SEC = { '1m': 60, '3m': 180, '5m': 300, '15m': 900, '30m': 1800, '1h': 3600, '4h': 14400 };
 
 function chartInit() {
     const el = $('tv-chart');
@@ -189,6 +190,23 @@ function chartApplySize() {
     if (chart && el.clientWidth > 0) chart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
 }
 
+function applyDealMarkers() {
+    if (!candleSeries) return;
+    const deals = (dnaState.dna && dnaState.dna.deals) || [];
+    const tf = TF_SEC[state.tf] || 300;
+    const marks = [];
+    deals.filter(d => d.symbol === state.symbol).forEach(d => {
+        const isLong = d.side === 'long';
+        const tEnter = Math.floor((d.open_ts / 1000) / tf) * tf;
+        const tExit = Math.floor((d.close_ts / 1000) / tf) * tf;
+        marks.push({ time: tEnter, position: isLong ? 'belowBar' : 'aboveBar', color: d.pnl >= 0 ? '#00e0a4' : '#ff5c7a', shape: isLong ? 'arrowUp' : 'arrowDown', text: `мой вход (${d.r_multiple > 0 ? '+' : ''}${d.r_multiple}R)` });
+        marks.push({ time: Math.max(tExit, tEnter), position: isLong ? 'aboveBar' : 'belowBar', color: 'rgba(139,92,246,.9)', shape: 'circle', text: `выход ${d.pnl >= 0 ? '+' : ''}${fmt(d.pnl, 2)}` });
+    });
+    marks.sort((a, b) => a.time - b.time);
+    if (!mainMarkers) mainMarkers = LightweightCharts.createSeriesMarkers(candleSeries, []);
+    mainMarkers.setMarkers(marks);
+}
+
 async function loadChart() {
     if (!chart) return;
     $('chart-source').textContent = 'загрузка…';
@@ -201,6 +219,8 @@ async function loadChart() {
         }));
         candleSeries.setData(rows);
         volSeries.setData(vols);
+        // маркеры моих сделок по этой монете (из ДНК)
+        applyDealMarkers();
         chart.timeScale().fitContent();
         const live = d.data_source === 'live' || d.data_source === 'bybit';
         $('chart-source').textContent = d.empty ? 'нет данных' : (live ? '📡 Bybit' : '⚠️ учебные данные');
@@ -211,14 +231,26 @@ async function loadChart() {
 }
 
 /* ---------- Лента сигналов ---------- */
+function fitChip(s, compact) {
+    const f = s.fit;
+    if (!f || f.score == null) return '';
+    const strong = f.score >= 60, weak = f.score < 42;
+    const color = strong ? 'var(--long)' : weak ? 'var(--short)' : 'var(--amber)';
+    const title = esc([...(f.warnings || []), ...(f.notes || [])].join('\n'));
+    return `<span title="${title}" style="font-size:10px;font-weight:800;padding:3px 8px;border-radius:99px;border:1px solid ${color};color:${color}">🎯 ${f.score}</span>`;
+}
+
 function renderFeed() {
-    const feed = [...state.feed].reverse();
+    const strongOnly = $('flt-strong') && $('flt-strong').checked;
+    const feed = [...state.feed].reverse().filter(s =>
+        !strongOnly || (s.fit && s.fit.score != null && s.fit.score >= 60));
     const html = feed.map(s => signalCardHTML(s)).join('');
     $('feed').innerHTML = html || '<div class="empty" style="grid-column:1/-1">Сигналов пока нет — сканер работает…</div>';
     $('mini-feed').innerHTML = feed.slice(0, 20).map(s => `
         <div style="display:flex;gap:10px;align-items:center;padding:7px 2px;border-bottom:1px solid rgba(148,163,255,.06);font-size:12px;cursor:pointer" onclick="selectSymbol('${s.symbol}')">
             <span class="side-pill ${s.side.toLowerCase()}">${s.side}</span>
             <b style="font-family:var(--mono)">${s.symbol}</b>
+            ${fitChip(s)}
             <span style="font-family:var(--mono)">${fmtPx(s.price)}</span>
             <span style="color:var(--muted);font-size:11px">${esc(s.strategy)}${s.strategy_auto ? ' <span style="color:var(--cyan)">⚡авто</span>' : ''}</span>
             <span style="margin-left:auto;color:var(--muted);font-size:11px;font-family:var(--mono)">${fmtTime(s.ts)}</span>
@@ -237,8 +269,10 @@ function signalCardHTML(s) {
         <div class="sc-head">
             <span class="sc-sym">${s.symbol}</span>
             <span class="side-pill ${s.side.toLowerCase()}">${s.side}</span>
+            ${fitChip(s)}
             <span class="sc-time">${fmtTime(s.ts)}</span>
         </div>
+        ${s.fit && s.fit.warnings && s.fit.warnings.length ? `<div class="sc-strat" style="color:var(--amber)">⚠️ ${esc(s.fit.warnings[0])}</div>` : ''}
         <div class="sc-row">
             <span><b>Вход</b>${fmtPx(s.price)}</span>
             <span><b>TP</b><span style="color:var(--long)">${fmtPx(s.tp)}</span></span>
@@ -380,9 +414,19 @@ async function loadPortfolio() {
                 `<tr><td>${r.symbol}</td><td>${r.trades}</td><td>${fmt(r.winrate, 1)}%</td><td class="${r.pnl >= 0 ? 'pos' : 'neg'}">${fmt(r.pnl)}</td></tr>`).join('');
 
         $('pf-recent').innerHTML = '<tr><th>Монета</th><th>Сторона</th><th>Вход</th><th>Выход</th><th>PnL</th><th>Закрыта</th></tr>' +
-            (d.recent || []).map(t =>
-                `<tr><td>${t.symbol}</td><td>${t.side || '—'}</td><td>${fmtPx(t.entry)}</td><td>${fmtPx(t.exit)}</td>
-                 <td class="${t.pnl >= 0 ? 'pos' : 'neg'}">${t.pnl >= 0 ? '+' : ''}${fmt(t.pnl)}</td><td>${t.closed || '—'}</td></tr>`).join('');
+            (d.recent || []).map(t => {
+                const clickable = t.open_ts && t.close_ts;
+                return `<tr class="${clickable ? 'deal-row' : ''}" ${clickable ? `data-symbol="${t.symbol}" data-side="${t.side}" data-open="${t.open_ts}" data-close="${t.close_ts}"` : ''} style="${clickable ? 'cursor:pointer' : ''}" title="${clickable ? 'Клик — график сделки с метками' : ''}">
+                <td>${t.symbol}</td><td>${t.side || '—'}</td><td>${fmtPx(t.entry)}</td><td>${fmtPx(t.exit)}</td>
+                 <td class="${t.pnl >= 0 ? 'pos' : 'neg'}">${t.pnl >= 0 ? '+' : ''}${fmt(t.pnl)}</td><td>${t.closed || '—'}</td></tr>`;
+            }).join('');
+        $('pf-recent').querySelectorAll('.deal-row').forEach(row =>
+            row.addEventListener('click', () =>
+                openDealModal(row.dataset.symbol, row.dataset.side, +row.dataset.open, +row.dataset.close)));
+
+        // ДНК и персона подтягиваются параллельно
+        loadDNA(false);
+        loadPersona();
 
         // эквити
         const el = $('equity-chart');
@@ -432,14 +476,229 @@ function bindDropzone() {
 bindDropzone();
 
 async function uploadCSV(text) {
+    toast('⏳ Файл получен, загружаю на сервер…', '', 2000);
     try {
         const r = await API.post('/api/portfolio/csv', text, true);
-        toast(`✅ CSV сохранён: распознано сделок: ${r.count}`);
-        loadPortfolio();
+        if (r.count > 0) {
+            toast(`✅ CSV сохранён: распознано сделок: ${r.count}`);
+            loadPortfolio();
+        } else {
+            toast(`⚠️ Файл загружен, но сделки не распознаны.<br><span style="color:var(--muted)">${esc(r.hint || 'Проверьте формат CSV')}</span>`, '', 8000);
+        }
     } catch (e) {
-        toast('❌ ' + e.message);
+        toast('❌ Загрузка CSV: ' + e.message);
     }
 }
+
+/* Диагностика Bybit API (сеть + read-only ключ) */
+async function runBybitDiag() {
+    const box = $('bybit-diag');
+    box.innerHTML = '⏳ Диагностика…';
+    await saveAllQuiet();
+    try {
+        const d = await API.get('/api/portfolio/diagnose');
+        const hosts = (d.hosts || []).map(h =>
+            `<div><span style="color:${h.ok ? 'var(--long)' : 'var(--short)'}">${h.ok ? '✓' : '✗'}</span> ${esc(h.host)} — ${esc(h.detail)}${h.latency_ms != null ? ` (${h.latency_ms} мс)` : ''}</div>`).join('');
+        let key = '';
+        if (d.key_check) {
+            key = `<div style="margin-top:6px">Ключ: <span style="color:${d.key_check.ok ? 'var(--long)' : 'var(--short)'}">${d.key_check.ok ? '✓' : '✗'}</span> ${esc(d.key_check.detail || '')}</div>`;
+        }
+        if (d.time_offset_ms != null) {
+            key += `<div style="color:var(--muted)">Рассинхрон часов с Bybit: скорректировано автоматически (${d.time_offset_ms} мс)</div>`;
+        }
+        const tips = (d.tips || []).map(t => `<div style="margin-top:6px;color:var(--amber)">💡 ${esc(t)}</div>`).join('');
+        box.innerHTML = hosts + key + tips;
+    } catch (e) {
+        box.innerHTML = `<span style="color:var(--short)">ошибка: ${esc(e.message)}</span>`;
+    }
+}
+
+/* ---------- ДНК торговли + AI-персона + график сделки ---------- */
+let dnaState = { dna: null, mtime: 0 };
+let personaES = null;
+
+async function loadDNA(rebuild) {
+    const box = $('dna-block');
+    if (rebuild) box.innerHTML = '<div class="thinking"><span class="pulse"></span>Считаю контекст каждой сделки на графиках (MAE/MFE, индикаторы в момент входа) — до минуты…</div>';
+    try {
+        const d = await API.get(`/api/portfolio/dna?days=${pfDays}${rebuild ? '&rebuild=true' : ''}`);
+        dnaState.dna = d.dna;
+        renderDNA(d.dna, d.cached);
+        loadChart(); // обновить маркеры сделок на терминале
+    } catch (e) {
+        if (rebuild) box.innerHTML = '';
+    }
+}
+
+function renderDNA(dna, cached) {
+    const box = $('dna-block');
+    if (!dna) { box.innerHTML = ''; return; }
+    const sq = dna.stop_quality || {};
+    const bh = dna.behavior || {};
+    const chip = (z, good) => `<span class="chip" style="border-color:${good ? 'rgba(0,224,164,.4)' : 'rgba(255,92,122,.4)'};${good ? 'color:var(--long)' : 'color:var(--short)'}" title="winrate ${z.winrate}% · ${z.trades} сделок · PnL ${z.pnl}">${esc(z.zone)} · ${z.winrate}%</span>`;
+    const builtAt = new Date(dna.built_at * 1000).toLocaleString('ru-RU');
+    box.innerHTML = `
+    <div class="review-block" style="border-color:rgba(34,211,238,.3)">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <h4 style="margin:0">🧬 ДНК вашей торговли</h4>
+            <span class="hint" style="margin:0">построена ${builtAt} · сделок: ${dna.total_trades}${dna.enriched ? `, на графиках разобрано: ${dna.enriched}` : ''}${cached ? ' · из кэша' : ''}</span>
+            <div class="spacer"></div>
+            <button class="btn btn-sm" id="dna-rebuild-btn">⟳ Пересчитать</button>
+        </div>
+        <div style="margin-top:10px">
+            <div class="hint" style="margin-bottom:4px">💪 Сильные зоны</div>
+            <div>${(dna.strengths || []).map(z => chip(z, true)).join('') || '<span class="hint">пока не выявлены</span>'}</div>
+            <div class="hint" style="margin:8px 0 4px">⚠️ Слабые зоны</div>
+            <div>${(dna.weaknesses || []).map(z => chip(z, false)).join('') || '<span class="hint">пока не выявлены</span>'}</div>
+        </div>
+        <div style="display:flex;gap:22px;flex-wrap:wrap;margin-top:12px;font-size:12px;font-family:var(--mono)">
+            ${sq.avg_capture != null ? `<span><b style="color:var(--muted);font-weight:500;font-size:10px;text-transform:uppercase">Забираете движения</b><br>${sq.avg_capture}%</span>` : ''}
+            ${sq.avg_mae_winners != null ? `<span><b style="color:var(--muted);font-weight:500;font-size:10px;text-transform:uppercase">MAE прибыльных</b><br>${sq.avg_mae_winners}%</span>` : ''}
+            ${sq.avg_mae_losers != null ? `<span><b style="color:var(--muted);font-weight:500;font-size:10px;text-transform:uppercase">MAE убыточных</b><br>${sq.avg_mae_losers}%</span>` : ''}
+            ${sq.avg_entry_pctile_losers != null ? `<span><b style="color:var(--muted);font-weight:500;font-size:10px;text-transform:uppercase">Процентиль входа (лужеи/виннеры)</b><br>${sq.avg_entry_pctile_losers} / ${sq.avg_entry_pctile_winners ?? '—'}</span>` : ''}
+            ${bh.revenge_trades ? `<span><b style="color:var(--muted);font-weight:500;font-size:10px;text-transform:uppercase">Реванш-сделок (&lt;30м после стопа)</b><br>${bh.revenge_trades}${bh.revenge_winrate != null ? ` · winrate ${bh.revenge_winrate}%` : ''}</span>` : ''}
+        </div>
+    </div>`;
+    $('dna-rebuild-btn').addEventListener('click', () => loadDNA(true));
+}
+
+/* AI-персона: все агенты анализируют ДНК */
+async function loadPersona() {
+    try {
+        const d = await API.get('/api/portfolio/persona');
+        if (d.persona) renderPersona(d.persona);
+    } catch (e) { }
+}
+
+function runPersonaBuild() {
+    const box = $('pf-persona');
+    if (!dnaState.dna) {
+        toast('Сначала постройте ДНК (кнопка «🧬 ДНК торговли» → «⟳ Пересчитать» при необходимости)');
+        loadDNA(true);
+        return;
+    }
+    if (personaES) personaES.close();
+    box.innerHTML = '<div class="review-block"><h4>🔮 Агенты изучают вашу торговлю…</h4><div id="persona-progress"></div></div>';
+    const es = new EventSource('/api/portfolio/persona/build');
+    personaES = es;
+    es.addEventListener('progress', e => {
+        const p = JSON.parse(e.data);
+        const row = document.getElementById('persona-progress');
+        if (!row) return;
+        const stTxt = { working: '⏳ думает…', done: '✅', error: '⚠️ ' + (p.detail || 'ошибка'), skipped: '⏸ выключен', no_key: '🔑 нет ключа' }[p.status] || p.status;
+        box.querySelector('#persona-progress').insertAdjacentHTML('beforeend',
+            `<div style="font-size:12px;margin:4px 0"><b>${esc(p.name)}</b> <span style="color:var(--muted)">${stTxt}</span>
+             ${p.verdict && p.verdict.tokens_est ? `<span class="hint" style="display:inline">≈${p.verdict.tokens_est} ток.</span>` : ''}</div>`);
+    });
+    es.addEventListener('persona', e => {
+        renderPersona(JSON.parse(e.data));
+    });
+    es.addEventListener('error', e => {
+        try { const d = JSON.parse(e.data); box.insertAdjacentHTML('beforeend', `<div class="empty" style="color:var(--short)">⚠️ ${esc(d.message || '')}</div>`); } catch { }
+        es.close();
+    });
+    es.addEventListener('done', () => { es.close(); personaES = null; });
+    es.onerror = () => { es.close(); personaES = null; };
+}
+
+function renderPersona(p) {
+    const box = $('pf-persona');
+    const m = p.merged || {};
+    const li = arr => (arr || []).map(x => `<li>${esc(x)}</li>`).join('');
+    const built = p.built_at ? new Date(p.built_at * 1000).toLocaleString('ru-RU') : '';
+    const roles = Object.keys(p.by_role || {}).length;
+    box.innerHTML = `
+    <div class="review-block" style="border-color:rgba(139,92,246,.45)">
+        <div style="display:flex;align-items:center;gap:10px">
+            <h4 style="margin:0">🔮 Персона вашей торговли</h4>
+            <span class="hint" style="margin:0">${roles} агентов · ${built}</span>
+            <div class="spacer"></div>
+            <button class="btn btn-sm" id="persona-rebuild-btn">⟳ Пересобрать</button>
+        </div>
+        ${m.essence ? `<div style="font-size:13px;line-height:1.6;margin-top:10px"><i>${esc(m.essence)}</i></div>` : ''}
+        <div class="pf-cols" style="margin-top:12px">
+            <div>
+                <h4>💪 Сильные стороны</h4><ul>${li(m.strengths)}</ul>
+                <h4 style="margin-top:10px">⚠️ Слабые места</h4><ul>${li(m.weaknesses)}</ul>
+            </div>
+            <div>
+                <h4>🎯 Какие сигналы вам подходят</h4><ul>${li(m.signal_hints)}</ul>
+                <h4 style="margin-top:10px">⛔ Чего избегать</h4><ul>${li(m.avoid)}</ul>
+            </div>
+        </div>
+        <div class="hint" style="margin-top:10px">Эта персона автоматически добавляется в промпт каждого агента при «Совете агентов» — сигналы оцениваются с учётом вашего стиля.</div>
+    </div>`;
+    $('persona-rebuild-btn').addEventListener('click', runPersonaBuild);
+}
+
+/* ---------- Модалка графика сделки ---------- */
+let dealChartObj = null, dealSeries = null, dealVolSeries = null, dealMarkers = null;
+
+function openDealModal(symbol, side, openTs, closeTs) {
+    $('deal-modal').classList.add('open');
+    $('deal-title').textContent = `📌 ${symbol} · ${side}`;
+    $('deal-sub').textContent = '';
+    $('deal-info').innerHTML = '<div class="thinking"><span class="pulse"></span>Загружаю график периода сделки…</div>';
+    const el = $('deal-chart');
+    el.innerHTML = '';
+    if (dealChartObj) { dealChartObj.remove(); dealChartObj = null; }
+
+    API.get(`/api/portfolio/deal-chart?symbol=${symbol}&side=${side}&open_ts=${openTs}&close_ts=${closeTs}`)
+        .then(d => {
+            dealChartObj = LightweightCharts.createChart(el, {
+                width: el.clientWidth, height: 340,
+                layout: { background: { type: LightweightCharts.ColorType.Solid, color: 'transparent' }, textColor: '#8a93b8', fontFamily: '"JetBrains Mono", monospace', fontSize: 11 },
+                grid: { vertLines: { color: 'rgba(148,163,255,.06)' }, horzLines: { color: 'rgba(148,163,255,.06)' } },
+                rightPriceScale: { borderColor: 'rgba(148,163,255,.15)' },
+                timeScale: { borderColor: 'rgba(148,163,255,.15)', timeVisible: true },
+            });
+            dealSeries = dealChartObj.addSeries(LightweightCharts.CandlestickSeries, {
+                upColor: '#00e0a4', downColor: '#ff5c7a',
+                borderUpColor: '#00e0a4', borderDownColor: '#ff5c7a',
+                wickUpColor: 'rgba(0,224,164,.7)', wickDownColor: 'rgba(255,92,122,.7)',
+            });
+            dealSeries.setData(d.candles);
+            const longSide = side.toLowerCase() === 'buy' || side.toLowerCase() === 'long';
+            const eC = d.candles[d.entry_idx], xC = d.candles[d.exit_idx];
+            dealMarkers = LightweightCharts.createSeriesMarkers(dealSeries, [
+                { time: eC.time, position: longSide ? 'belowBar' : 'aboveBar', color: '#22d3ee', shape: longSide ? 'arrowUp' : 'arrowDown', text: `вход ${fmtPx(d.entry_px)}` },
+                { time: xC.time, position: longSide ? 'aboveBar' : 'belowBar', color: '#8b5cf6', shape: 'circle', text: `выход ${fmtPx(d.exit_px)}` },
+            ]);
+            dealSeries.createPriceLine({ price: d.entry_px, color: '#22d3ee', lineStyle: LightweightCharts.LineStyle.Dashed, lineWidth: 1, title: 'вход' });
+            dealSeries.createPriceLine({ price: d.mfe_px, color: 'rgba(0,224,164,.8)', lineStyle: LightweightCharts.LineStyle.Dotted, lineWidth: 1, title: 'MFE (макс. в плюс)' });
+            dealSeries.createPriceLine({ price: d.mae_px, color: 'rgba(255,92,122,.8)', lineStyle: LightweightCharts.LineStyle.Dotted, lineWidth: 1, title: 'MAE (макс. против)' });
+            dealChartObj.timeScale().fitContent();
+            dealChartObj.timeScale().setVisibleRange({
+                from: d.candles[0].time, to: d.candles[d.candles.length - 1].time,
+            });
+
+            const ind = d.indicators || {};
+            const hold = d.candles[d.exit_idx].time - d.candles[d.entry_idx].time;
+            $('deal-sub').textContent = `${d.tf} · RSI при входе ${ind.rsi ?? '—'} · режим: ${d.regime}`;
+            $('deal-info').innerHTML = `
+                <div style="display:flex;gap:22px;flex-wrap:wrap;font-size:12px;font-family:var(--mono)">
+                    <span><b style="color:var(--muted);font-weight:500;font-size:10px;text-transform:uppercase">RSI при входе</b><br>${ind.rsi ?? '—'}</span>
+                    <span><b style="color:var(--muted);font-weight:500;font-size:10px;text-transform:uppercase">ATR%</b><br>${ind.atr_pct ?? '—'}</span>
+                    <span><b style="color:var(--muted);font-weight:500;font-size:10px;text-transform:uppercase">Объём ×ср</b><br>${ind.volume_ratio ?? '—'}</span>
+                    <span><b style="color:var(--muted);font-weight:500;font-size:10px;text-transform:uppercase">Режим рынка</b><br>${esc(d.regime)}</span>
+                    <span><b style="color:var(--muted);font-weight:500;font-size:10px;text-transform:uppercase">Удержание</b><br>${Math.round(hold / 3600 * 10) / 10} ч</span>
+                </div>`;
+        })
+        .catch(e => {
+            $('deal-info').innerHTML = `<div class="empty" style="color:var(--short)">⚠️ ${esc(e.message)}</div>`;
+        });
+}
+
+$('deal-close').addEventListener('click', () => {
+    $('deal-modal').classList.remove('open');
+    if (dealChartObj) { dealChartObj.remove(); dealChartObj = null; }
+});
+$('deal-modal').addEventListener('click', e => {
+    if (e.target === $('deal-modal')) {
+        $('deal-modal').classList.remove('open');
+        if (dealChartObj) { dealChartObj.remove(); dealChartObj = null; }
+    }
+});
 
 /* AI-разбор торговли */
 function runAIReview() {
@@ -688,6 +947,12 @@ $('council-close').addEventListener('click', closeCouncil);
 $('council-modal').addEventListener('click', e => { if (e.target === $('council-modal')) closeCouncil(); });
 $('pf-reload').addEventListener('click', loadPortfolio);
 $('pf-ai-btn').addEventListener('click', runAIReview);
+$('pf-dna-btn').addEventListener('click', () => {
+    loadPortfolio().then(() => loadDNA(true));
+});
+$('pf-persona-btn').addEventListener('click', runPersonaBuild);
+$('diag-bybit-btn').addEventListener('click', runBybitDiag);
+$('flt-strong').addEventListener('change', renderFeed);
 $('test-models-btn').addEventListener('click', testModels);
 $('load-models-btn').addEventListener('click', loadModelsList);
 $('ping-bybit-btn').addEventListener('click', pingBybit);

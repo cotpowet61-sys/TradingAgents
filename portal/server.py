@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Body
@@ -188,7 +189,129 @@ async def portfolio_csv(text: str = Body(..., media_type="text/plain")):
     if len(text) > 8_000_000:
         raise HTTPException(413, "Файл слишком большой (>8 МБ)")
     res = ta_mod.save_csv(text)
+    if res["count"] == 0:
+        res["hint"] = ("Сделки не распознаны. Нужен CSV из Bybit: Orders → Trade History "
+                       "(или Position History) → Export. Убедитесь, что файл не Excel (.xlsx).")
     return res
+
+
+@app.get("/api/portfolio/diagnose")
+async def portfolio_diagnose():
+    """Проверка: сеть до хостов Bybit + валидность read-only ключа."""
+    from bybit_account import diagnose
+    return await diagnose()
+
+
+# ---------------------------------------------------------------------- #
+# ДНК торговли + график сделки + AI-персона
+# ---------------------------------------------------------------------- #
+@app.get("/api/portfolio/dna")
+async def portfolio_dna(days: int = 90, rebuild: bool = False):
+    import trade_context as tc
+    if not rebuild:
+        cached = tc.load_dna()
+        if cached and cached.get("days") == days:
+            return {"dna": cached, "cached": True}
+    try:
+        data = await ta_mod.load_trades(days=days)
+    except BybitAuthError as e:
+        raise HTTPException(400, str(e))
+    trades = data["trades"]
+    if not trades:
+        raise HTTPException(400, "Сделок не найдено за этот период")
+
+    recent = sorted(trades, key=lambda t: t.get("close_ts") or 0, reverse=True)[:tc.ENRICH_LIMIT]
+    sem = asyncio.Semaphore(5)
+
+    async def one(t):
+        async with sem:
+            try:
+                return await tc.enrich_trade(t)
+            except Exception:
+                return None
+
+    enriched = [r for r in await asyncio.gather(*(one(t) for t in recent)) if r]
+    dna = tc.build_dna(trades, enriched, days)
+    tc.save_dna(dna)
+    return {"dna": dna, "cached": False}
+
+
+@app.get("/api/portfolio/deal-chart")
+async def portfolio_deal_chart(symbol: str, side: str, open_ts: int, close_ts: int):
+    import trade_context as tc
+    try:
+        return await tc.deal_chart(symbol.upper(), side, open_ts, close_ts)
+    except Exception as e:
+        raise HTTPException(400, str(e)[:300])
+
+
+@app.get("/api/portfolio/persona")
+async def persona_get():
+    import trade_context as tc
+    return {"persona": tc.load_persona()}
+
+
+@app.get("/api/portfolio/persona/build")
+async def persona_build():
+    """Каждый включённый агент анализирует ДНК → единая персона трейдера."""
+    import trade_context as tc
+    from llm_client import has_key, chat as llm_chat, parse_json_verdict
+    from council import backend_roles
+
+    dna = tc.load_dna()
+    if not dna:
+        raise HTTPException(400, "Сначала постройте ДНК своей торговли (кнопка «Построить ДНК»)")
+
+    async def gen():
+        preamble = tc.build_persona_preamble(dna)
+        by_role = {}
+        for role in COUNCIL_ROLES:
+            meta = role_meta(role)
+            if not settings.role_enabled(role):
+                yield _ev("progress", {"role": role, "name": meta["name"], "status": "skipped"})
+                continue
+            if not has_key(role):
+                yield _ev("progress", {"role": role, "name": meta["name"], "status": "no_key"})
+                continue
+            yield _ev("progress", {"role": role, "name": meta["name"], "status": "working"})
+            r = backend_roles.ROLES.get(role)
+            system = tc.PERSONA_SYSTEM.format(name=meta["name"], expertise=r.expertise if r else meta["name"])
+            messages = [
+                {"role": "system", "content": system},
+                {"role": "user", "content": "ДАННЫЕ О ТОРГОВЛЕ ПОЛЬЗОВАТЕЛЯ:\n" + preamble + "\n\nВыдай строгий JSON."},
+            ]
+            try:
+                text = await llm_chat(role, messages, json_mode=True, max_tokens=900)
+                verdict = parse_json_verdict(text)
+                verdict["tokens_est"] = (sum(len(str(m["content"])) for m in messages) + len(text)) // 4
+                by_role[role] = verdict
+                yield _ev("progress", {"role": role, "name": meta["name"], "status": "done", "verdict": verdict})
+            except Exception as e:
+                yield _ev("progress", {"role": role, "name": meta["name"], "status": "error", "detail": str(e)[:160]})
+
+        merged = {
+            "essence": "",
+            "strengths": [],
+            "weaknesses": [],
+            "signal_hints": [],
+            "avoid": [],
+        }
+        for rk in ["strategist", "risk", "momentum", "contrarian", "macro"]:
+            v = by_role.get(rk)
+            if v and not merged["essence"] and v.get("essence"):
+                merged["essence"] = v["essence"]
+        for v in by_role.values():
+            merged["strengths"] += [s for s in (v.get("strengths") or []) if s][:2]
+            merged["weaknesses"] += [s for s in (v.get("weaknesses") or []) if s][:2]
+            merged["signal_hints"] += [s for s in (v.get("signal_hints") or []) if s][:2]
+            merged["avoid"] += [s for s in (v.get("avoid") or []) if s][:2]
+
+        persona = {"built_at": int(time.time()), "by_role": by_role, "merged": merged}
+        tc.save_persona(persona)
+        yield _ev("persona", persona)
+        yield _ev("done", {})
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 @app.get("/api/portfolio/ai-review")

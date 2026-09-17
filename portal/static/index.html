@@ -69,6 +69,7 @@
                 <div class="panel-head">⚡ Live-лента сигналов
                     <span class="sub">индикаторные, AI-токены не тратятся · клик по карточке → открыть график</span>
                     <div class="spacer"></div>
+                    <label class="chk" title="Показывать только сигналы из ваших исторически сильных зон (по ДНК торговли)"><input type="checkbox" id="flt-strong"> 🎯 только мои сильные зоны</label>
                     <label class="chk"><input type="checkbox" id="ntf-sound"> 🔊 звук</label>
                     <label class="chk"><input type="checkbox" id="ntf-toasts"> 🔔 всплывашки</label>
                 </div>
@@ -89,6 +90,8 @@
                             <button data-days="180">180д</button>
                         </div>
                         <button class="btn" id="pf-reload">⟳ Обновить</button>
+                        <button class="btn" id="pf-dna-btn" title="Числовой разбор каждой сделки на графике (0 токенов)">🧬 ДНК торговли</button>
+                        <button class="btn" id="pf-persona-btn" title="Все агенты анализируют вашу ДНК → профиль вашей торговли (AI)">🔮 Персона (AI)</button>
                         <button class="btn btn-accent" id="pf-ai-btn">🤖 AI-разбор торговли</button>
                     </div>
                     <div class="panel-body" id="pf-body" style="overflow:visible">
@@ -98,6 +101,7 @@
                         </div>
                         <div id="pf-content" style="display:none">
                             <div class="stat-cards" id="pf-stats"></div>
+                            <div id="dna-block" style="margin-top:18px"></div>
                             <div class="pf-cols" style="margin-top:18px">
                                 <div>
                                     <div class="hint" style="margin:0 0 6px 2px">Кривая эквити (накопленный PnL)</div>
@@ -110,10 +114,11 @@
                                     <table class="tbl" id="pf-symbols"></table>
                                 </div>
                             </div>
-                            <div class="hint" style="margin:18px 0 6px 2px">Последние сделки</div>
+                            <div class="hint" style="margin:18px 0 6px 2px">Последние сделки — <b>клик по строке открывает график сделки</b> с метками входа/выхода</div>
                             <table class="tbl" id="pf-recent"></table>
                         </div>
                         <div id="pf-review" style="margin-top:18px"></div>
+                        <div id="pf-persona" style="margin-top:18px"></div>
                     </div>
                 </div>
             </div>
@@ -146,7 +151,11 @@
                         <button class="btn btn-accent btn-sm" id="save-bybit-btn">💾 Сохранить</button>
                     </div>
                     <div class="panel-body">
-                        <div class="kv"><label>Соединение</label><span id="bybit-conn" class="hint">не проверялось</span><button class="btn btn-sm" id="ping-bybit-btn">🔍 Проверить</button></div>
+                        <div class="kv"><label>Соединение</label><span id="bybit-conn" class="hint">не проверялось</span>
+                            <button class="btn btn-sm" id="ping-bybit-btn">🔍 Проверить</button>
+                            <button class="btn btn-sm" id="diag-bybit-btn" title="Сеть до хостов + проверка read-only ключа">🩺 Диагностика API</button>
+                        </div>
+                        <div id="bybit-diag" class="hint"></div>
                         <div class="kv"><label>API Key (read-only)</label><input type="password" id="set-bb-key"></div>
                         <div class="kv"><label>API Secret</label><input type="password" id="set-bb-secret" placeholder="виден только здесь, сохраняется локально"></div>
                         <div class="hint">⚠️ Создавайте ключ <b>только с правом чтения</b>: Bybit → API Management →
@@ -205,6 +214,21 @@
             <button class="x" id="council-close">✕</button>
         </div>
         <div class="modal-body" id="council-body"></div>
+    </div>
+</div>
+
+<!-- Модалка графика сделки -->
+<div class="modal-wrap" id="deal-modal">
+    <div class="modal">
+        <div class="modal-head">
+            <span id="deal-title">📌 Сделка</span>
+            <span class="sub" id="deal-sub" style="font-weight:500;color:var(--muted);font-size:12px"></span>
+            <button class="x" id="deal-close">✕</button>
+        </div>
+        <div class="modal-body">
+            <div id="deal-chart" style="height:340px"></div>
+            <div id="deal-info" style="margin-top:14px"></div>
+        </div>
     </div>
 </div>
 
