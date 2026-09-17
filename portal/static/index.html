@@ -75,6 +75,31 @@
                     <label class="chk"><input type="checkbox" id="ntf-toasts"> 🔔 всплывашки</label>
                 </div>
             </div>
+            <div class="panel" style="flex:0 0 auto">
+                <div class="panel-head">📈 Бэктест live-сигналов
+                    <span class="sub">те же правила сканера (авто-подбор, порог, риск) на истории · 0 AI-токенов</span>
+                    <div class="spacer"></div>
+                    <label class="kv" style="margin:0"><label style="width:auto;margin-right:4px">Дней</label>
+                        <input type="number" id="sbt-days" value="7" min="1" max="180" style="width:64px"></label>
+                    <button class="btn" id="sbt-toggle">фильтры</button>
+                    <button class="btn btn-accent" id="sbt-run" title="Прогнать live-сканер по истории выбранных монет/ТФ">▶ Прогнать</button>
+                </div>
+                <div class="panel-body hidden" id="sbt-cfg" style="padding:10px 14px">
+                    <div class="kv"><label>Монеты</label><div class="tf-chips" id="sbt-symbols"></div></div>
+                    <div class="kv"><label>Таймфреймы</label><div class="tf-chips" id="sbt-tfs">
+                        <label class="chk"><input type="checkbox" data-tf="1m">1m</label>
+                        <label class="chk"><input type="checkbox" data-tf="3m">3m</label>
+                        <label class="chk"><input type="checkbox" data-tf="5m" checked>5m</label>
+                        <label class="chk"><input type="checkbox" data-tf="15m">15m</label>
+                        <label class="chk"><input type="checkbox" data-tf="30m">30m</label>
+                        <label class="chk"><input type="checkbox" data-tf="1h">1h</label>
+                        <label class="chk"><input type="checkbox" data-tf="4h">4h</label>
+                    </div></div>
+                    <div class="hint">Цели/стопы берутся из текущих Настроек (ручной риск → ATR → 2:1), порог уверенности — тот же, что у ленты.
+                    Для 1m доступно до 5 дней истории, 5m — до 20, 15m — до 45, старше — до 180.</div>
+                </div>
+                <div class="panel-body" id="sbt-body" style="display:none;max-height:600px;overflow:auto"></div>
+            </div>
             <div class="feed" id="feed"></div>
         </section>
 

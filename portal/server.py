@@ -435,6 +435,25 @@ async def live_state():
     return {"state": eng.state(), "feed": eng.feed[-30:], "prices": eng.prices}
 
 
+@app.post("/api/signals/backtest")
+async def signals_backtest(payload: dict = Body(default={})):
+    """Бэктест live-сканера: те же монеты/ТФ/правила риска, только на истории.
+    Body: {symbols: [...], tfs: [...], days: N}. 0 AI-токенов."""
+    from signal_backtest import run_signal_backtest, BacktestError
+    symbols = payload.get("symbols") or settings.watchlist
+    tfs = payload.get("tfs") or settings.signal_timeframes
+    days = int(payload.get("days") or 7)
+    if isinstance(symbols, str):
+        symbols = [s.strip() for s in symbols.split(",") if s.strip()]
+    if isinstance(tfs, str):
+        tfs = [t.strip() for t in tfs.split(",") if t.strip()]
+    days = max(1, min(days, 180))
+    try:
+        return await run_signal_backtest(symbols, tfs, days)
+    except BacktestError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.websocket("/ws")
 async def ws(ws: WebSocket):
     eng = get_engine()

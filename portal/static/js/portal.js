@@ -768,6 +768,7 @@ async function loadSettings() {
         state.config = cfg;
         renderSettings(cfg);
         renderWatchlist();
+        buildSbtCfg();
         renderWLEdit(cfg.live.watchlist);
         $('env-path').textContent = cfg.env_path || 'portal/.env';
     } catch (e) {
@@ -994,7 +995,91 @@ $('pf-dna-btn').addEventListener('click', () => {
 });
 $('pf-persona-btn').addEventListener('click', runPersonaBuild);
 
-/* ---------- 🎯 Моя стратегия (из ваших сделок, 0 токенов) ---------- */
+/* ---------- 📈 Бэктест live-сигналов ---------- */
+function buildSbtCfg() {
+    const box = $('sbt-symbols');
+    if (!box) return;
+    const wl = (state.config && state.config.live && state.config.live.watchlist) || [];
+    box.innerHTML = wl.map(s =>
+        `<label class="chk"><input type="checkbox" data-sym="${s}" checked>${s.replace('USDT', '')}</label>`).join('');
+}
+
+$('sbt-toggle') && $('sbt-toggle').addEventListener('click', () =>
+    $('sbt-cfg').classList.toggle('hidden'));
+
+function sbtStatsHtml(agg) {
+    const ex = agg.exits || {};
+    return `<div class="pf-stats" style="grid-template-columns:repeat(auto-fit,minmax(120px,1fr))">
+        ${[['Сделок', agg.trades || 0, ''],
+        ['Winrate', (agg.winrate ?? '—') + '%', agg.winrate >= 50 ? 'pos' : 'neg'],
+        ['Суммарный PnL', (agg.total_pnl_pct >= 0 ? '+' : '') + (agg.total_pnl_pct ?? '—') + '%', agg.total_pnl_pct >= 0 ? 'pos' : 'neg'],
+        ['Средний PnL', (agg.avg_pnl_pct ?? '—') + '%', agg.avg_pnl_pct >= 0 ? 'pos' : 'neg'],
+        ['Profit factor', agg.profit_factor ?? '—', (agg.profit_factor || 0) >= 1.2 ? 'pos' : ''],
+        ['Ср. длит., мин', agg.avg_duration_min ?? '—', ''],
+        ['Выходы TP/SL/тмаут', `${ex.TP || 0}/${ex.SL || 0}/${ex.timeout || 0}`, '']]
+        .map(c => `<div class="stat-card"><b>${c[0]}</b><div class="v ${c[2]}">${c[1]}</div></div>`).join('')}
+    </div>`;
+}
+
+function sbtRows(rows, cols) {
+    return '<table class="tbl">' +
+        '<tr>' + cols.map(c => `<th>${c[0]}</th>`).join('') + '</tr>' +
+        rows.map(r => '<tr>' + cols.map((c, i) =>
+            `<td class="${c[2] ? c[2](r) : ''}">${c[1](r)}</td>`).join('') + '</tr>').join('') +
+        '</table>';
+}
+
+async function runSignalsBacktest() {
+    const btn = $('sbt-run'), body = $('sbt-body');
+    const symbols = [...document.querySelectorAll('#sbt-symbols input:checked')].map(i => i.dataset.sym);
+    const tfs = [...document.querySelectorAll('#sbt-tfs input:checked')].map(i => i.dataset.tf);
+    const days = parseInt($('sbt-days').value) || 7;
+    if (!symbols.length) { toast('⚠️ Выбери хотя бы одну монету'); return; }
+    if (!tfs.length) { toast('⚠️ Выбери хотя бы один таймфрейм'); return; }
+    btn.disabled = true; btn.textContent = '⏳ считаю…';
+    body.style.display = '';
+    body.innerHTML = '<div class="empty">Скачиваю историю и прогоняю сканер по барам… (1m — до минуты)</div>';
+    try {
+        const d = await API.post('/api/signals/backtest', { symbols, tfs, days });
+        const p = d.params || {};
+        let html = `<div class="hint" style="margin-bottom:8px">Режим: ${esc(p.strategy_mode || '')} · порог ${p.min_confidence} · риск: ${esc(p.risk || '')} · данные: реальные свечи Bybit</div>`;
+        html += sbtStatsHtml(d.overall || {});
+        const pc = [['Монета', r => r.symbol], ['TF', r => r.tf], ['Дн', r => r.days],
+                    ['Сделок', r => r.trades], ['WR', r => (r.winrate ?? '—') + '%', r => r.winrate >= 50 ? 'pos' : 'neg'],
+                    ['PnL %', r => r.total_pnl_pct ?? '—', r => r.total_pnl_pct >= 0 ? 'pos' : 'neg'],
+                    ['PF', r => r.profit_factor ?? '—'],
+                    ['TP/SL/тм', r => { const e = r.exits || {}; return `${e.TP || 0}/${e.SL || 0}/${e.timeout || 0}`; }]];
+        if ((d.per_pair || []).length) {
+            html += '<h4 style="margin:12px 0 6px">По монетам и графикам</h4>' + sbtRows(d.per_pair, pc);
+        }
+        const sc = [['Стратегия', r => esc(r.strategy)], ['Сделок', r => r.trades],
+                    ['WR', r => (r.winrate ?? '—') + '%', r => r.winrate >= 50 ? 'pos' : 'neg'],
+                    ['PnL %', r => r.total_pnl_pct ?? '—', r => r.total_pnl_pct >= 0 ? 'pos' : 'neg'],
+                    ['PF', r => r.profit_factor ?? '—']];
+        if ((d.by_strategy || []).length) {
+            html += '<h4 style="margin:12px 0 6px">По стратегиям (что реально срабатывало)</h4>' + sbtRows(d.by_strategy, sc);
+        }
+        const tc = [['Монета', r => r.symbol], ['TF', r => r.tf], ['Сторона', r => r.side],
+                    ['Стратегия', r => esc(r.strategy)], ['Выход', r => r.reason],
+                    ['PnL %', r => (r.pnl_pct >= 0 ? '+' : '') + r.pnl_pct, r => r.pnl_pct >= 0 ? 'pos' : 'neg'],
+                    ['Мин', r => r.duration_min], ['Увер.', r => r.conf]];
+        if ((d.recent_trades || []).length) {
+            html += '<h4 style="margin:12px 0 6px">Последние виртуальные сделки</h4>' + sbtRows(d.recent_trades.slice(0, 15), tc);
+        }
+        (d.notes || []).forEach(n => { html += `<div class="hint" style="margin-top:6px">ℹ️ ${esc(n)}</div>`; });
+        (d.errors || []).forEach(e => { html += `<div class="hint" style="margin-top:6px;color:var(--amber)">⚠️ ${esc(e)}</div>`; });
+        if (!(d.overall || {}).trades) html += '<div class="empty" style="margin-top:10px">За период сканер не дал ни одного сигнала выше порога — попробуй больше дней, другой TF или ниже порог уверенности.</div>';
+        body.innerHTML = html;
+        toast(`📈 Бэктест готов: ${(d.overall || {}).trades || 0} вирт. сделок`);
+    } catch (e) {
+        body.innerHTML = `<div class="empty" style="color:var(--amber)">⚠️ ${esc(e.message)}</div>`;
+    } finally {
+        btn.disabled = false; btn.textContent = '▶ Прогнать';
+    }
+}
+$('sbt-run') && $('sbt-run').addEventListener('click', runSignalsBacktest);
+
+
 function renderMyStrategy(ms) {
     const box = $('mystrat-body');
     if (!box) return;
