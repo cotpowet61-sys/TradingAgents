@@ -39,7 +39,11 @@ SYSTEM_TEMPLATE = """Ты — {name} в профессиональной мул�
 - thinking — 2-4 коротких пункта твоего хода размышлений (что ты видишь в данных и почему).
 - NEUTRAL ставь, если нет уверенного перевеса в какую-либо сторону.
 - Учитывай, что платформа уже рассчитала сигнал по индикаторной стратегии «{strategy}»: {strategy_signal}.
+{strategy_note}
 - Ты можешь согласиться, усилить или оспорить этот сигнал. Если оспариваешь — объясни в reason.
+- Твой главный источник — данные ниже (фичи индикаторов и последние свечи), а не чужой сигнал:
+  опирайся на собственный анализ рынка. Если считаешь, что текущему графику лучше подходит
+  другой тип стратегии (тренд/канал/сетка/скальп), скажи об этом в reason.
 - confidence — твоя субъективная уверенность, не обязательно равна сигналу стратегии.
 """
 
@@ -68,6 +72,22 @@ ROLES = {
 
 def build_prompt(role_key: str, snapshot: dict) -> list[dict]:
     role = ROLES[role_key]
+
+    # Как была выбрана индикаторная стратегия (аженту важно знать степень доверия)
+    auto = snapshot.get("strategy_auto") or {}
+    if auto.get("enabled"):
+        src_ru = {
+            "optimizer_profile": "по итогам полных сохранённых бэктестов этой монеты",
+            "quick_backtest": "быстрым бэктестом ВСЕХ стратегий прямо по свежему графику",
+            "fallback": "как универсальный вариант (свежих данных было мало)",
+        }.get(auto.get("source"), "автоматически")
+        strategy_note = (
+            "- Стратегия подобрана платформой АВТОМАТИЧЕСКИ (не вручную) — "
+            + src_ru + "."
+        )
+    else:
+        strategy_note = "- Эту стратегию выбрал пользователь вручную."
+
     system = SYSTEM_TEMPLATE.format(
         name=role.name,
         expertise=role.expertise,
@@ -79,12 +99,30 @@ def build_prompt(role_key: str, snapshot: dict) -> list[dict]:
         sl=snapshot.get("sl", 1.0),
         strategy=snapshot.get("strategy", "-"),
         strategy_signal=snapshot.get("strategy_signal", "-"),
+        strategy_note=strategy_note,
     )
+
     user = (
         f"ТЕХНИЧЕСКИЙ СНИМОК РЫНКА:\n{json.dumps(snapshot.get('features', {}), ensure_ascii=False)}\n\n"
         f"Дополнительные свечные данные (последние бары):\n{snapshot.get('recent', '')}\n\n"
-        f"Выдай строгий JSON-вердикт."
     )
+
+    # Сравнение стратегий на свежем графике — чтобы агент видел альтернативы
+    cand = auto.get("candidates") or []
+    if cand:
+        rows = []
+        for i, c in enumerate(cand, 1):
+            wr = c.get("win_rate")
+            rows.append(
+                f"{i}) {c.get('name', c.get('type'))}: сделок {c.get('trades', 0)}, "
+                f"winrate {wr if wr is not None else '?'}%, PnL {c.get('pnl_pct', '?')}%"
+            )
+        user += (
+            "СРАВНЕНИЕ СТРАТЕГИЙ НА СВЕЖЕМ ГРАФИКЕ (быстрый бэктест, лучшие сверху):\n"
+            + "\n".join(rows) + "\n\n"
+        )
+
+    user += "Выдай строгий JSON-вердикт."
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": user},

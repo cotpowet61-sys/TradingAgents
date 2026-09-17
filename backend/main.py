@@ -344,7 +344,7 @@ async def optimize_profiles():
 # ---------------------------------------------------------------------- #
 class AnalyzeRequest(BaseModel):
     symbol: str
-    strategy: str = "momentum_breakout"
+    strategy: str = "auto"
     timeframe: str = "5m"
     params: Optional[dict] = None
 
@@ -543,7 +543,7 @@ async def code_save(req: CodeSaveRequest):
 # Стриминг-анализ (SSE) — «ветки размышлений» агентов в реальном времени
 # ---------------------------------------------------------------------- #
 @app.get("/api/analyze/stream")
-async def analyze_stream(symbol: str, strategy: str = "momentum_breakout",
+async def analyze_stream(symbol: str, strategy: str = "auto",
                          timeframe: str = None):
     orch = get_orchestrator()
 

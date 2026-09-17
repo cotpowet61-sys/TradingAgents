@@ -611,7 +611,7 @@ let treeTarget = { rootId: 'tree-root', labelId: 'consensus-symbol' };
 function runAnalysis() {
     startAnalysis({
         symbol: state.currentSymbol,
-        strategy: document.getElementById('bt-strategy').value,
+        strategy: 'auto',   // агентам стратегию не навязываем — платформа подберёт по графику
         timeframe: state.currentTF,
         btn: document.getElementById('analyze-btn'),
         bodyId: 'consensus-body',
@@ -650,7 +650,7 @@ async function startAnalysis(cfg) {
     } else {
         try {
             const data = await API.post('/api/analyze', { symbol, strategy, timeframe });
-            onSnapshot({ symbol, timeframe, price: data.price, features: data.features, strategy: data.strategy });
+            onSnapshot({ symbol, timeframe, price: data.price, features: data.features, strategy: data.strategy, strategy_auto: data.strategy_auto });
             data.agents.forEach(onAgentVerdict);
             onConsensus({ consensus: data.consensus, signal: data.signal });
         } catch (e) { log('error', 'Ошибка анализа: ' + e.message); }
@@ -670,6 +670,12 @@ function onSnapshot(d) {
     document.getElementById(treeTarget.labelId).textContent =
         `${d.symbol} · ${d.timeframe} · цена ${fmtPrice(d.price)} · стратегия: ${d.strategy.name}`;
     const sig = d.strategy_signal;
+    const auto = d.strategy_auto || null;
+    const srcRu = auto ? ({ optimizer_profile: 'по сохранённым бэктестам', quick_backtest: 'быстрый бэктест по свежему графику', fallback: 'универсальный вариант, данных мало' })[auto.source] || '' : '';
+    const candRows = (auto && auto.candidates && auto.candidates.length)
+        ? `<div class="t-steps">${auto.candidates.slice(0, 5).map((c, i) =>
+            `<div class="t-step">${i + 1}) ${escapeHtml(c.name || c.type)} — сделок ${c.trades ?? 0}, winrate ${c.win_rate ?? '—'}%, PnL ${c.pnl_pct ?? '—'}%</div>`).join('')}</div>`
+        : '';
     const nEnabled = (state.config && state.config.roles) ? state.config.roles.filter(r => r.enabled).length : 5;
     const thinkTxt = nEnabled > 0 ? `${nEnabled} ${plural(nEnabled,'агент','агента','агентов')} размышляют…` : 'все агенты выключены — только индикаторы';
     root.insertAdjacentHTML('beforeend', `
@@ -677,11 +683,15 @@ function onSnapshot(d) {
             <div class="tree-agent" style="opacity:.75">
                 <span class="t-icon">📊</span>
                 <div>
-                    <div class="t-name">Индикаторная стратегия · <span class="muted">${d.strategy.name}</span></div>
+                    <div class="t-name">Индикаторная стратегия · <span class="muted">${d.strategy.name}</span>
+                        ${auto ? ` <span class="badge data-src" style="font-size:9px;padding:1px 6px" title="${escapeHtml(srcRu)}">⚡ авто-подбор</span>` : ''}
+                    </div>
+                    ${auto ? `<div class="muted" style="font-size:11px;margin-top:2px">Стратегия подобрана автоматически (${escapeHtml(srcRu)}). Агенты также анализируют график сами и могут предложить другую.</div>` : ''}
                     <div class="a-verdict" style="margin-top:4px">
                         <span class="pill ${sig && sig.side === 'LONG' ? 'long' : sig && sig.side === 'SHORT' ? 'short' : 'neutral'}">${sig ? sig.side : '—'}</span>
                         <span class="muted">${sig && sig.reason ? sig.reason : ''}</span>
                     </div>
+                    ${candRows ? `<div class="muted" style="font-size:11px;margin-top:6px">Лучшие стратегии по свежему графику:</div>${candRows}` : ''}
                 </div>
             </div>
         </div>
@@ -1190,10 +1200,12 @@ async function loadCoinChart() {
 }
 
 function runCoinAnalysis() {
-    const strategy = document.getElementById('sl-strategy').value || 'auto';
+    // Анализ агентов всегда 'auto': не берём стратегию из блока "Live 1-на-1" —
+    // платформа сама подберёт её по графику (быстрый бэктест всех стратегий),
+    // а агенты дополнительно опираются на собственные данные снимка.
     startAnalysis({
         symbol: state.coin.symbol,
-        strategy: strategy,
+        strategy: 'auto',
         timeframe: state.coin.tf,
         btn: document.getElementById('coin-analyze-btn'),
         bodyId: 'coin-consensus-body',

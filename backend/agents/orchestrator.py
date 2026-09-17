@@ -32,11 +32,20 @@ class Orchestrator:
     # Подготовка снимка рынка (общая для analyze и analyze_stream)
     # ------------------------------------------------------------------ #
     async def _prepare(self, symbol: str, strategy_type: str, timeframe: str, params: Optional[dict]):
-        # "auto" — лучшая стратегия для монеты из профиля оптимизатора
-        if strategy_type in (None, "", "auto"):
-            from strategies.selector import get_selector
-            strategy_type = get_selector().best_strategy(symbol, timeframe)
+        auto_mode = strategy_type in (None, "", "auto")
         candles = await self.market.get_klines(symbol, timeframe)
+
+        strategy_auto = None
+        candidates: list = []
+        if auto_mode:
+            # Стратегию не навязываем: подбираем по свежему графику
+            # (профиль оптимизатора → быстрый бэктест всех стратегий → fallback).
+            # Агенты видят сравнение и могут опираться на собственный анализ.
+            from strategies.selector import get_selector
+            strategy_type, candidates, src = get_selector().auto_pick(
+                symbol, timeframe, candles)
+            strategy_auto = {"enabled": True, "source": src, "candidates": candidates}
+
         strategy = build_strategy(strategy_type, params=params)
         if strategy is None:
             raise ValueError(f"Неизвестная стратегия: {strategy_type}")
@@ -51,6 +60,7 @@ class Orchestrator:
             "max_hold": settings.MAX_HOLD_HOURS,
             "sl": settings.DEFAULT_SL_PCT,
             "strategy": strategy.name,
+            "strategy_auto": strategy_auto,
             "strategy_signal": strat_sig.side.value + f" (conf={strat_sig.confidence})" if strat_sig else "нет данных",
             "features": features,
             "recent": recent,
@@ -104,6 +114,7 @@ class Orchestrator:
             "price": features.get("price"),
             "features": features,
             "strategy": strategy.config_dict(),
+            "strategy_auto": snapshot.get("strategy_auto"),
             "strategy_signal": strat_sig.to_dict() if strat_sig else None,
             "agents": [self._agent_view(k, v) for k, v in verdicts.items()],
             "consensus": consensus,
@@ -126,6 +137,7 @@ class Orchestrator:
             "price": features.get("price"),
             "features": features,
             "strategy": strategy.config_dict(),
+            "strategy_auto": snapshot.get("strategy_auto"),
             "strategy_signal": strat_sig.to_dict() if strat_sig else None,
         })
 
@@ -267,10 +279,8 @@ class Orchestrator:
     async def scan_market(self, symbols: Optional[List[str]] = None,
                           strategy_type: str = "auto",
                           timeframe: str = None) -> list[dict]:
-        from strategies.selector import get_selector
         symbols = symbols or settings.symbols
         timeframe = timeframe or settings.DEFAULT_TIMEFRAME
-        selector = get_selector()
         use_agents = bool(settings.AGENTS_AUTO_ANALYSIS)
 
         # Ограничиваем параллелизм, чтобы не перегружать API
@@ -279,10 +289,8 @@ class Orchestrator:
         async def one(sym):
             async with sem:
                 try:
-                    st = strategy_type
-                    if st in (None, "", "auto"):
-                        st = selector.best_strategy(sym, timeframe)
-                    return await self.analyze(sym, st, timeframe, use_agents=use_agents)
+                    # «auto» резолвится в _prepare: быстрый бэктест по графику (кэш 15 мин)
+                    return await self.analyze(sym, strategy_type, timeframe, use_agents=use_agents)
                 except Exception as e:
                     return {"symbol": sym, "error": str(e), "signal": {"side": "NEUTRAL", "action": "WAIT"}}
 

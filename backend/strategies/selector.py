@@ -145,6 +145,85 @@ class StrategySelector:
             return top[0]
         return fallback
 
+    # ------------------------------------------------------------------ #
+    # Быстрый автоподбор по свежему графику (для «Анализа агентов» в режиме
+    # auto): гоняет ВСЕ стратегии на уже загруженных свечах, кэширует итог
+    # на RANK_CACHE_TTL сек. Возвращает (лучший_type, топ-N кандидатов, источник).
+    # Приоритет: профиль оптимизатора → быстрый бэктест → fallback.
+    # ------------------------------------------------------------------ #
+    RANK_CACHE_TTL = 900  # 15 минут
+
+    def quick_rank(self, symbol: str, timeframe: str, candles,
+                   top_n: int = 5, min_trades: int = 3) -> list:
+        """Отсортированный список стратегий по композитному score на свежих данных."""
+        key = self._key(symbol, timeframe)
+        ent = getattr(self, "_rank_cache", {}).get(key)
+        now = time.time()
+        if ent and now - ent[0] < self.RANK_CACHE_TTL and ent[2] == len(candles):
+            return ent[1]
+
+        results = []
+        for schema in STRATEGY_SCHEMAS():
+            stype = schema["type"]
+            try:
+                strategy = build_strategy(stype)
+                r = run_backtest(strategy, candles, timeframe)
+            except Exception:
+                continue
+            trades = r.total_trades
+            win_rate = r.win_rate
+            pnl = r.total_pnl_pct
+            avg_pnl = (pnl / trades) if trades else 0.0
+            # мягкие пороги: данных мало (последние ~сотни свечей)
+            ok = trades >= min_trades and win_rate >= 50.0 and pnl > 0
+            score = win_rate + min(avg_pnl, 5.0) * 2.0 + min(trades, 20) * 0.25
+            results.append({
+                "type": stype,
+                "name": schema["name"],
+                "trades": trades,
+                "win_rate": round(win_rate, 2),
+                "pnl_pct": round(pnl, 3),
+                "ok": ok,
+                "score": round(score, 2),
+            })
+        results.sort(key=lambda x: (-x["ok"], -x["score"]))
+
+        if not hasattr(self, "_rank_cache"):
+            self._rank_cache = {}
+        self._rank_cache[key] = (now, results, len(candles))
+        return results
+
+    def auto_pick(self, symbol: str, timeframe: str, candles,
+                  fallback: str = "momentum_breakout"):
+        """(strategy_type, top_candidates, source) для режима 'auto'."""
+        timeframe = timeframe or settings.DEFAULT_TIMEFRAME
+
+        # 1) сохранённый профиль оптимизатора (полные бэктесты)
+        prof = self.get_profile(symbol, timeframe)
+        top = prof.get("top") or []
+        if top:
+            stype = top[0]
+            info = prof.get("strategies", {}).get(stype) or {}
+            cand = [{
+                "type": stype,
+                "name": info.get("name", stype),
+                "trades": info.get("trades"),
+                "win_rate": info.get("win_rate"),
+                "pnl_pct": info.get("pnl_pct"),
+            }]
+            return stype, cand, "optimizer_profile"
+
+        # 2) быстрый бэктест по свежему графику
+        if candles:
+            ranking = self.quick_rank(symbol, timeframe, candles)
+            viable = next((r for r in ranking if r["ok"]), None)
+            pick = viable or (ranking[0] if ranking else None)
+            if pick and pick["trades"] > 0:
+                return pick["type"], ranking[:5], "quick_backtest"
+
+        # 3) fallback — универсальный вариант
+        return fallback, [], "fallback"
+
     def best_strategies(self, symbol: str, timeframe: str = None,
                         fallback: str = "momentum_breakout") -> List[str]:
         timeframe = timeframe or settings.DEFAULT_TIMEFRAME
