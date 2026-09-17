@@ -102,6 +102,18 @@ function connectWS() {
         } else if (d.type === 'prices') {
             state.prices = d.prices || state.prices;
             renderWatchlist();
+        } else if (d.type === 'signal_close') {
+            // исход живого сигнала: TP / SL / таймаут / разворот
+            state.feed.push(d);
+            state.feed = state.feed.slice(-60);
+            renderFeed();
+            if ($('ntf-toasts').checked && d.reason !== 'REFRESH') {
+                const icon = { TP: '✅', SL: '❌', TIMEOUT: '⏱', REVERSED: '🔁' }[d.reason] || 'ℹ️';
+                const pnl = d.pnl_pct == null ? '' : ` · <b style="color:var(--${d.pnl_pct >= 0 ? 'long' : 'short'})">${d.pnl_pct >= 0 ? '+' : ''}${d.pnl_pct}%</b>`;
+                toast(`${icon} <b>${d.symbol}</b> ${d.side} ${d.timeframe} закрыт: ${d.reason}${pnl}
+                       <br><span style="color:var(--muted)">за ${d.duration_min} мин · ${esc(d.strategy || '')}</span>`,
+                    d.pnl_pct >= 0 ? 'long' : 'short', 8000);
+            }
         } else if (d.type === 'signal') {
             state.feed.push(d);
             state.feed = state.feed.slice(-60);
@@ -262,23 +274,53 @@ function fitChip(s, compact) {
 function renderFeed() {
     const strongOnly = $('flt-strong') && $('flt-strong').checked;
     const feed = [...state.feed].reverse().filter(s =>
-        !strongOnly || (s.fit && s.fit.score != null && s.fit.score >= 60));
-    const html = feed.map(s => signalCardHTML(s)).join('');
+        !strongOnly || s.type === 'signal_close' || (s.fit && s.fit.score != null && s.fit.score >= 60));
+    const html = feed.map(s => s.type === 'signal_close' ? closeCardHTML(s) : signalCardHTML(s)).join('');
     $('feed').innerHTML = html || '<div class="empty" style="grid-column:1/-1">Сигналов пока нет — сканер работает…</div>';
-    $('mini-feed').innerHTML = feed.slice(0, 20).map(s => `
-        <div style="display:flex;gap:10px;align-items:center;padding:7px 2px;border-bottom:1px solid rgba(148,163,255,.06);font-size:12px;cursor:pointer" onclick="selectSymbol('${s.symbol}')">
+    const _closeLbl = { TP: '✅ TP', SL: '❌ SL', TIMEOUT: '⏱ тмаут', REVERSED: '🔁 разворот', REFRESH: '🔄 обновлён' };
+    $('mini-feed').innerHTML = feed.slice(0, 20).map(s => {
+        const isClose = s.type === 'signal_close';
+        const mid = isClose
+            ? `<span style="font-family:var(--mono)">${fmtPx(s.exit ?? s.entry)}</span>
+               <span style="font-size:11px;color:var(--${(s.pnl_pct || 0) >= 0 ? 'long' : 'short'})">${_closeLbl[s.reason] || s.reason}${s.pnl_pct != null ? ' ' + (s.pnl_pct >= 0 ? '+' : '') + s.pnl_pct + '%' : ''}</span>`
+            : `${fitChip(s)}
+               <span style="font-family:var(--mono)">${fmtPx(s.price)}</span>
+               <span style="color:var(--muted);font-size:11px">${esc(s.strategy)}${s.strategy_auto ? ' <span style="color:var(--cyan)">⚡авто</span>' : ''}</span>`;
+        return `
+        <div style="display:flex;gap:10px;align-items:center;padding:7px 2px;border-bottom:1px solid rgba(148,163,255,.06);font-size:12px;cursor:pointer${isClose ? ';opacity:.8' : ''}" onclick="selectSymbol('${s.symbol}')">
             <span class="side-pill ${s.side.toLowerCase()}">${s.side}</span>
             <b style="font-family:var(--mono)">${s.symbol}</b>
-            ${fitChip(s)}
-            <span style="font-family:var(--mono)">${fmtPx(s.price)}</span>
-            <span style="color:var(--muted);font-size:11px">${esc(s.strategy)}${s.strategy_auto ? ' <span style="color:var(--cyan)">⚡авто</span>' : ''}</span>
+            ${mid}
             <span style="margin-left:auto;color:var(--muted);font-size:11px;font-family:var(--mono)">${fmtTime(s.ts)}</span>
-        </div>`).join('') || '<div class="empty">Ждём сигналы…</div>';
+        </div>`;
+    }).join('') || '<div class="empty">Ждём сигналы…</div>';
     document.querySelectorAll('#feed .signal-card').forEach(el =>
         el.addEventListener('click', () => {
             document.querySelector('#nav button[data-page="terminal"]').click();
             selectSymbol(el.dataset.symbol);
         }));
+}
+
+function closeCardHTML(s) {
+    const icon = { TP: '✅', SL: '❌', TIMEOUT: '⏱', REVERSED: '🔁', REFRESH: '🔄' }[s.reason] || 'ℹ️';
+    const label = { TP: 'закрыт по Take-Profit', SL: 'закрыт по Stop-Loss',
+                    TIMEOUT: 'таймаут удержания', REVERSED: 'развёрнут встречным сигналом',
+                    REFRESH: 'обновлён (перевыпуск)' }[s.reason] || s.reason;
+    const pnlCls = (s.pnl_pct || 0) >= 0 ? 'long' : 'short';
+    return `
+    <div class="signal-card ${(s.side || '').toLowerCase()}" data-symbol="${s.symbol}" style="opacity:.82">
+        <div class="sc-head">
+            <span class="sc-sym">${s.symbol} <span style="color:var(--muted);font-size:11px">${s.timeframe || ''}</span></span>
+            <span class="side-pill ${(s.side || '').toLowerCase()}">${s.side}</span>
+            <span class="sc-time">${fmtTime(s.ts)}</span>
+        </div>
+        <div class="sc-prices">
+            <span><b>Вход</b>${fmtPx(s.entry)}</span>
+            <span><b>Выход</b>${fmtPx(s.exit)}</span>
+            <span><b>Итог</b><span style="color:var(--${pnlCls});font-weight:700">${s.pnl_pct == null ? '—' : (s.pnl_pct >= 0 ? '+' : '') + s.pnl_pct + '%'}</span></span>
+        </div>
+        <div class="sc-strat">${icon} ${label} · за ${s.duration_min} мин · ${esc(s.strategy || '')}</div>
+    </div>`;
 }
 
 function signalCardHTML(s) {

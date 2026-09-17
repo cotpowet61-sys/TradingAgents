@@ -23,6 +23,8 @@ from strategies.selector import get_selector
 from strategies import indicators as ta
 
 MAX_FEED = 60
+SIGNAL_COOLDOWN_SEC = 1800   # повтор сигнала по (монета, TF, та же сторона) — не чаще 30 мин
+FLIP_CONF_MARGIN = 0.10      # разворот SHORT↔LONG — только если новая уверенность выше на 10 п.п.
 
 
 class LiveEngine:
@@ -35,6 +37,9 @@ class LiveEngine:
         self.last_scan: Optional[float] = None
         self._dna = None
         self._dna_mtime = 0.0
+        # Реестр активных сигналов: (symbol, tf) -> event. Сигнал «живёт»,
+        # пока цена не дойдёт до TP/SL или не выйдет таймаут удержания.
+        self.active: dict = {}
 
     def _fresh_dna(self):
         """ДНК трейдера с диска (перечитываем при обновлении файла)."""
@@ -113,6 +118,84 @@ class LiveEngine:
             self._mystrat = getattr(self, "_mystrat", None)
         return getattr(self, "_mystrat", None)
 
+    def _close_event(self, sig: dict, reason: str, exit_px: Optional[float]) -> dict:
+        entry = sig.get("price")
+        pnl = None
+        if exit_px and entry:
+            pnl = (exit_px - entry) / entry * 100
+            if sig.get("side") == "SHORT":
+                pnl = -pnl
+        return {
+            "type": "signal_close",
+            "symbol": sig.get("symbol"),
+            "timeframe": sig.get("timeframe"),
+            "side": sig.get("side"),
+            "strategy": sig.get("strategy"),
+            "reason": reason,                    # TP / SL / TIMEOUT / REVERSED / REFRESH
+            "entry": entry,
+            "exit": exit_px,
+            "pnl_pct": round(pnl, 3) if pnl is not None else None,
+            "open_ts": sig.get("ts"),
+            "duration_min": round((time.time() - (sig.get("ts") or 0) / 1000) / 60),
+            "ts": int(time.time() * 1000),
+        }
+
+    def _close_matured_signals(self) -> list:
+        """Проверяет активные сигналы по последним ценам: TP/SL/таймаут →
+        события signal_close. Вызывается каждое сканирование."""
+        out = []
+        now = time.time()
+        hold_sec = (settings.MANUAL_HOLD_MIN or 240) * 60
+        for key, sig in list(self.active.items()):
+            if sig.get("status") != "ACTIVE":
+                if now - sig.get("closed_at", now) > 86_400:
+                    del self.active[key]
+                continue
+            px = (self.prices.get(sig.get("symbol") or "") or {}).get("last")
+            reason, exit_px = None, None
+            tp, sl, side = sig.get("tp"), sig.get("sl"), sig.get("side")
+            if px and tp and sl:
+                if side == "LONG":
+                    if px >= tp:
+                        reason, exit_px = "TP", tp
+                    elif px <= sl:
+                        reason, exit_px = "SL", sl
+                elif side == "SHORT":
+                    if px <= tp:
+                        reason, exit_px = "TP", tp
+                    elif px >= sl:
+                        reason, exit_px = "SL", sl
+            if not reason and now - (sig.get("ts") or 0) / 1000 > hold_sec:
+                reason, exit_px = "TIMEOUT", px
+            if reason:
+                sig["status"] = "CLOSED_" + reason
+                sig["closed_at"] = now
+                out.append(self._close_event(sig, reason, exit_px))
+        return out
+
+    def _gate(self, sym: str, tf: str, side: str, conf: float) -> tuple:
+        """(allow, pending_close_event|None). Решает, пускать ли новый сигнал:
+        - та же сторона: только по кулдауну 30 мин (старый гасим как REFRESH);
+        - противоположная: только если conf >= старая + 0.10 (старый = REVERSED)."""
+        key = (sym, tf)
+        act = self.active.get(key)
+        if not act or act.get("status") != "ACTIVE":
+            return True, None
+        now_s = time.time()
+        if act.get("side") == side:
+            if now_s - (act.get("ts") or 0) / 1000 < SIGNAL_COOLDOWN_SEC:
+                return False, None
+            act["status"] = "CLOSED_REFRESH"
+            act["closed_at"] = now_s
+            return True, self._close_event(act, "REFRESH", act.get("price"))
+        # флип: новый сигнал обязан быть заметно увереннее живого
+        if conf < (act.get("confidence") or 0) + FLIP_CONF_MARGIN:
+            return False, None
+        act["status"] = "CLOSED_REVERSED"
+        act["closed_at"] = now_s
+        px = (self.prices.get(sym) or {}).get("last")
+        return True, self._close_event(act, "REVERSED", px)
+
     async def scan_once(self):
         market = get_market()
         symbols = settings.watchlist
@@ -135,6 +218,12 @@ class LiveEngine:
             pass
 
         sem = asyncio.Semaphore(4)
+
+        # 1) обновляем судьбу активных сигналов по свежим тикерам
+        for ev in self._close_matured_signals():
+            self.feed.append(ev)
+            self.feed = self.feed[-MAX_FEED:]
+            await self.broadcast(ev)
 
         async def one(sym, tf):
             async with sem:
@@ -214,12 +303,18 @@ class LiveEngine:
                         "reason": sig.reason,
                         "ts": int(time.time() * 1000),
                     }
-                    # антиспам: по паре (монета, сторона, TF) чаще 5 минут не повторяем
-                    if self.feed and self.feed[-1].get("symbol") == sym and \
-                            self.feed[-1].get("side") == sig.side.value and \
-                            self.feed[-1].get("timeframe") == tf and \
-                            time.time() - self.feed[-1].get("ts", 0) / 1000 < 300:
+                    # реестр: активный сигнал по (монета, TF) — один.
+                    # Повтор той же стороны — по кулдауну; разворот — только
+                    # при заметно большей уверенности (иначе старый сигнал живёт).
+                    allow, pending_close = self._gate(sym, tf, sig.side.value, sig.confidence)
+                    if not allow:
                         return
+                    if pending_close:
+                        self.feed.append(pending_close)
+                        self.feed = self.feed[-MAX_FEED:]
+                        await self.broadcast(pending_close)
+                    event["status"] = "ACTIVE"
+                    self.active[(sym, tf)] = dict(event)
                     self.feed.append(event)
                     self.feed = self.feed[-MAX_FEED:]
                     await self.broadcast(event)
