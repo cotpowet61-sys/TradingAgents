@@ -131,6 +131,8 @@ class LiveEngine:
             "timeframe": sig.get("timeframe"),
             "side": sig.get("side"),
             "strategy": sig.get("strategy"),
+            "stype": sig.get("stype"),
+            "conf": sig.get("confidence"),
             "reason": reason,                    # TP / SL / TIMEOUT / REVERSED / REFRESH
             "entry": entry,
             "exit": exit_px,
@@ -220,7 +222,13 @@ class LiveEngine:
         sem = asyncio.Semaphore(4)
 
         # 1) обновляем судьбу активных сигналов по свежим тикерам
+        #    (каждый исход — еда для обучения сканера)
+        import signal_learner as L
         for ev in self._close_matured_signals():
+            try:
+                L.learn_from_event(ev)
+            except Exception:
+                pass
             self.feed.append(ev)
             self.feed = self.feed[-MAX_FEED:]
             await self.broadcast(ev)
@@ -241,7 +249,21 @@ class LiveEngine:
                     sig = strat.generate(candles, len(candles) - 1)
                     if not sig or sig.side.value == "NEUTRAL":
                         return
-                    if sig.confidence < settings.MIN_CONFIDENCE:
+                    # самообучение по монете: глушим проигрышные комбинации,
+                    # подстраиваем порог под статистику исходов (0 токенов)
+                    learned = None
+                    min_conf = settings.MIN_CONFIDENCE
+                    try:
+                        import signal_learner as L
+                        adj = L.get_adjustment(sym, stype, sig.side.value)
+                        if adj and adj.get("blocked"):
+                            return
+                        if adj and adj.get("conf_delta"):
+                            min_conf = max(0.30, min(0.95, min_conf + adj["conf_delta"]))
+                            learned = adj
+                    except Exception:
+                        pass
+                    if sig.confidence < min_conf:
                         return
                     # персонализация под вашу историю (ДНК; 0 токенов)
                     fit = None
@@ -310,10 +332,17 @@ class LiveEngine:
                     if not allow:
                         return
                     if pending_close:
+                        try:
+                            L.learn_from_event(pending_close)
+                        except Exception:
+                            pass
                         self.feed.append(pending_close)
                         self.feed = self.feed[-MAX_FEED:]
                         await self.broadcast(pending_close)
                     event["status"] = "ACTIVE"
+                    event["stype"] = stype
+                    if learned:
+                        event["learned"] = learned
                     self.active[(sym, tf)] = dict(event)
                     self.feed.append(event)
                     self.feed = self.feed[-MAX_FEED:]

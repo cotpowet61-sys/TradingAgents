@@ -170,14 +170,16 @@ def _ev(event: str, data: dict) -> str:
 # Мои сделки
 # ---------------------------------------------------------------------- #
 @app.get("/api/portfolio/overview")
-async def portfolio_overview(days: int = 90, full: bool = False):
-    """full=true — полная перезагрузка истории за days дней (мимо кэша);
-    иначе — файловый кэш + докачка только новых сделок."""
+async def portfolio_overview(days: int = 90, full: bool = False,
+                             from_ts: int = 0, to_ts: int = 0):
+    """full=true — полная перезагрузка (мимо кэша); from_ts/to_ts — ручной диапазон дат (мс);
+    иначе — кэш + докачка только новых сделок."""
     try:
-        data = await ta_mod.load_trades(days=days, force=full)
+        data = await ta_mod.load_trades(days=days, force=full, from_ts=from_ts, to_ts=to_ts)
     except BybitAuthError as e:
         raise HTTPException(400, str(e))
-    stats = ta_mod.compute_stats(data["trades"], days=days)
+    span = data.get("span_days", days)
+    stats = ta_mod.compute_stats(data["trades"], days=span)
     return {
         "source": data["source"],
         "stats": stats,
@@ -203,17 +205,17 @@ async def my_strategy_get():
 
 
 @app.post("/api/portfolio/my-strategy")
-async def my_strategy_build(days: int = 90):
+async def my_strategy_build(days: int = 90, from_ts: int = 0, to_ts: int = 0):
     """Выводит персональную стратегию из ДНК (нужна построенная ДНК за этот период)."""
     import trade_context as tc
     dna = tc.load_dna()
     if not dna:
         raise HTTPException(400, "Сначала постройте ДНК торговли (кнопка 🧬) — стратегия выводится из неё.")
-    if dna.get("days") != days:
+    if not from_ts and dna.get("days") != days:
         raise HTTPException(400, f"ДНК построена за {dna.get('days')} дн., а выбрано {days} — "
                                  f"перестройте ДНК за этот период или выберите его снова.")
     try:
-        data = await ta_mod.load_trades(days=days)
+        data = await ta_mod.load_trades(days=days, from_ts=from_ts, to_ts=to_ts)
     except BybitAuthError as e:
         raise HTTPException(400, str(e))
     trades = data["trades"]
@@ -246,14 +248,15 @@ async def portfolio_diagnose():
 # ДНК торговли + график сделки + AI-персона
 # ---------------------------------------------------------------------- #
 @app.get("/api/portfolio/dna")
-async def portfolio_dna(days: int = 90, rebuild: bool = False):
+async def portfolio_dna(days: int = 90, rebuild: bool = False,
+                        from_ts: int = 0, to_ts: int = 0):
     import trade_context as tc
     if not rebuild:
         cached = tc.load_dna()
-        if cached and cached.get("days") == days:
+        if cached and cached.get("days") == days and not from_ts:
             return {"dna": cached, "cached": True}
     try:
-        data = await ta_mod.load_trades(days=days)
+        data = await ta_mod.load_trades(days=days, from_ts=from_ts, to_ts=to_ts)
     except BybitAuthError as e:
         raise HTTPException(400, str(e))
     trades = data["trades"]
@@ -355,17 +358,17 @@ async def persona_build():
 
 
 @app.get("/api/portfolio/ai-review")
-async def portfolio_ai_review(days: int = 90):
+async def portfolio_ai_review(days: int = 90, from_ts: int = 0, to_ts: int = 0):
     if not settings.role_enabled("portfolio"):
         raise HTTPException(400, "Агент «Аналитик сделок» выключен в Настройках")
     from llm_client import chat as llm_chat, has_key, parse_json_verdict
     if not has_key("portfolio"):
         raise HTTPException(400, "Введите AI-ключ в Настройках, чтобы аналитик сделок заработал")
     try:
-        data = await ta_mod.load_trades(days=days)
+        data = await ta_mod.load_trades(days=days, from_ts=from_ts, to_ts=to_ts)
     except BybitAuthError as e:
         raise HTTPException(400, str(e))
-    stats = ta_mod.compute_stats(data["trades"], days=days)
+    stats = ta_mod.compute_stats(data["trades"], days=data.get("span_days", days))
     if stats.get("empty"):
         raise HTTPException(400, "Сделок не найдено за этот период")
 
@@ -433,6 +436,22 @@ async def models():
 async def live_state():
     eng = get_engine()
     return {"state": eng.state(), "feed": eng.feed[-30:], "prices": eng.prices}
+
+
+@app.get("/api/signals/learned")
+async def signals_learned():
+    """Самообучение сканера: правила по монетам (из исходов live-сигналов)."""
+    import signal_learner as L
+    rules = L.fresh_rules() or L.compute_rules()
+    return {"rules": rules, "outcomes": len(L.read_outcomes()),
+            "thresholds": {"min_sample": L.MIN_SAMPLE, "hard_sample": L.HARD_SAMPLE,
+                           "tighten_wr": L.TIGHTEN_WR, "boost_wr": L.BOOST_WR, "block_wr": L.BLOCK_WR}}
+
+
+@app.post("/api/signals/learned/reset")
+async def signals_learned_reset(payload: dict = Body(default={})):
+    import signal_learner as L
+    return L.reset((payload.get("symbol") or "").strip().upper() or None)
 
 
 @app.post("/api/signals/backtest")

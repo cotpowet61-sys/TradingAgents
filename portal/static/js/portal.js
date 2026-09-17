@@ -107,6 +107,7 @@ function connectWS() {
             state.feed.push(d);
             state.feed = state.feed.slice(-60);
             renderFeed();
+            loadLearned();
             if ($('ntf-toasts').checked && d.reason !== 'REFRESH') {
                 const icon = { TP: '✅', SL: '❌', TIMEOUT: '⏱', REVERSED: '🔁' }[d.reason] || 'ℹ️';
                 const pnl = d.pnl_pct == null ? '' : ` · <b style="color:var(--${d.pnl_pct >= 0 ? 'long' : 'short'})">${d.pnl_pct >= 0 ? '+' : ''}${d.pnl_pct}%</b>`;
@@ -339,7 +340,7 @@ function signalCardHTML(s) {
             <span><b>TP</b><span style="color:var(--long)">${fmtPx(s.tp)}</span></span>
             <span><b>SL</b><span style="color:var(--short)">${fmtPx(s.sl)}</span></span>
         </div>
-        <div class="sc-strat">${esc(s.strategy)}${s.strategy_auto ? ' · <span class="auto">⚡ авто-подбор по графику</span>' : ''} · TF ${s.timeframe}${s.rr_free ? ' · <span style="color:var(--cyan)">TP/SL по ATR графика</span>' : ''}${s.risk_manual ? ' · <span style="color:var(--cyan)">🎛 ручной риск' + (s.hold_min ? ` · ⏱ ~${Math.round(s.hold_min)} мин` : '') + '</span>' : ''}${s.my_strategy && s.my_strategy.hits ? ` · <span style="color:#7de9c3">🎯 ваша стратегия ${s.my_strategy.hits}/${s.my_strategy.total}</span>` : ''}</div>
+        <div class="sc-strat">${esc(s.strategy)}${s.strategy_auto ? ' · <span class="auto">⚡ авто-подбор по графику</span>' : ''} · TF ${s.timeframe}${s.rr_free ? ' · <span style="color:var(--cyan)">TP/SL по ATR графика</span>' : ''}${s.risk_manual ? ' · <span style="color:var(--cyan)">🎛 ручной риск' + (s.hold_min ? ` · ⏱ ~${Math.round(s.hold_min)} мин` : '') + '</span>' : ''}${s.my_strategy && s.my_strategy.hits ? ` · <span style="color:#7de9c3">🎯 ваша стратегия ${s.my_strategy.hits}/${s.my_strategy.total}</span>` : ''}${s.learned && s.learned.note ? ` · <span style="color:var(--amber)" title="Правило из самообучения сканера">🧠 ${esc(s.learned.note)}</span>` : ''}</div>
         ${s.reason ? `<div class="sc-strat" style="opacity:.8">${esc(s.reason)}</div>` : ''}
         <div class="conf-bar"><i style="width:${confPct}%"></i></div>
     </div>`;
@@ -438,18 +439,62 @@ function runCouncil() {
 
 /* ---------- Мои сделки ---------- */
 let pfChart = null, pfSeries = null, pfDays = 90;
+let pfFromTs = 0, pfToTs = 0;   // ручной диапазон (мс) — приоритет над кнопками 30/90/180/365
 
 document.querySelectorAll('#pf-period button').forEach(b =>
     b.addEventListener('click', () => {
         document.querySelectorAll('#pf-period button').forEach(x => x.classList.toggle('active', x === b));
         pfDays = parseInt(b.dataset.days);
+        pfFromTs = pfToTs = 0;
+        $('pf-from').value = ''; $('pf-to').value = '';
+        $('pf-dates').classList.remove('active');
         loadPortfolio();
     }));
 
+function pfApplyDates() {
+    const f = $('pf-from').value, t = $('pf-to').value;
+    if (!f || !t) return;
+    const fts = new Date(f + 'T00:00:00').getTime();
+    const tts = new Date(t + 'T23:59:59.999').getTime();
+    if (!fts || !tts || fts >= tts) { toast('⚠️ Проверь диапазон дат: «с» должна быть раньше «по»'); return; }
+    pfFromTs = fts; pfToTs = tts;
+    pfDays = Math.max(1, Math.ceil((tts - fts) / 86400000));
+    $('pf-dates').classList.add('active');
+    document.querySelectorAll('#pf-period button').forEach(x => x.classList.remove('active'));
+    loadPortfolio();
+}
+$('pf-from').addEventListener('change', pfApplyDates);
+$('pf-to').addEventListener('change', pfApplyDates);
+$('pf-dates-clear').addEventListener('click', () => {
+    pfFromTs = pfToTs = 0;
+    $('pf-from').value = ''; $('pf-to').value = '';
+    $('pf-dates').classList.remove('active');
+    const def = document.querySelector('#pf-period button[data-days="90"]') ||
+                document.querySelector('#pf-period button');
+    def && def.click();
+});
+
+function pfQuery() {
+    const span = Math.max(1, Math.ceil(((pfToTs || Date.now()) - (pfFromTs || Date.now() - pfDays * 86400000)) / 86400000));
+    const base = `days=${pfFromTs && pfToTs ? span : pfDays}`;
+    return pfFromTs && pfToTs ? `${base}&from_ts=${pfFromTs}&to_ts=${pfToTs}` : base;
+}
+
+function pfLoader(show, text) {
+    const el = $('pf-loading');
+    if (!el) return;
+    el.classList.toggle('hidden', !show);
+    if (text) $('pf-loading-text').textContent = text;
+}
+
 async function loadPortfolio() {
     const empty = $('pf-empty'), content = $('pf-content');
+    const full = !!loadPortfolio._full;
+    pfLoader(true, full
+        ? 'ПОЛНАЯ выгрузка с Bybit (365 дн = ~53 запроса, до 2 минут)…'
+        : 'Обновляю сделки (инкрементально, обычно секунды)…');
     try {
-        const d = await API.get(`/api/portfolio/overview?days=${pfDays}${loadPortfolio._full ? '&full=true' : ''}`);
+        const d = await API.get(`/api/portfolio/overview?${pfQuery()}${full ? '&full=true' : ''}`);
         loadPortfolio._full = false;
         const st = d.stats;
         $('pf-source').textContent = d.source === 'bybit_api'
@@ -516,6 +561,8 @@ async function loadPortfolio() {
             <div class="dropzone" id="csv-drop" style="margin-top:14px">📂 Перетащите CSV-экспорт Bybit сюда</div>
         </div>`;
         bindDropzone();
+    } finally {
+        pfLoader(false);
     }
 }
 
@@ -585,7 +632,7 @@ async function loadDNA(rebuild) {
     const box = $('dna-block');
     if (rebuild) box.innerHTML = '<div class="thinking"><span class="pulse"></span>Считаю контекст каждой сделки на графиках (MAE/MFE, индикаторы в момент входа) — до минуты…</div>';
     try {
-        const d = await API.get(`/api/portfolio/dna?days=${pfDays}${rebuild ? '&rebuild=true' : ''}`);
+        const d = await API.get(`/api/portfolio/dna?${pfQuery()}${rebuild ? '&rebuild=true' : ''}`);
         dnaState.dna = d.dna;
         renderDNA(d.dna, d.cached);
         loadChart(); // обновить маркеры сделок на терминале
@@ -769,7 +816,7 @@ function runAIReview() {
     const box = $('pf-review');
     box.innerHTML = '<div class="review-block"><div class="thinking"><span class="pulse"></span>💼 Аналитик разбирает вашу историю сделок…</div></div>';
     if (state.reviewES) state.reviewES.close();
-    const es = new EventSource(`/api/portfolio/ai-review?days=${pfDays}`);
+    const es = new EventSource(`/api/portfolio/ai-review?${pfQuery()}`);
     state.reviewES = es;
     es.addEventListener('review', e => {
         const r = JSON.parse(e.data);
@@ -1037,7 +1084,34 @@ $('pf-dna-btn').addEventListener('click', () => {
 });
 $('pf-persona-btn').addEventListener('click', runPersonaBuild);
 
-/* ---------- 📈 Бэктест live-сигналов ---------- */
+/* ---------- 🧠 Обучение сканера ---------- */
+async function loadLearned() {
+    const box = $('learn-body');
+    if (!box) return;
+    try {
+        const d = await API.get('/api/signals/learned');
+        const rules = d.rules || {};
+        const syms = Object.keys(rules);
+        if (!syms.length) {
+            box.innerHTML = 'Статистика появится после первых закрытых сигналов (TP/SL/таймаут/разворот).';
+            return;
+        }
+        const icon = { block: '⛔', tighten: '🧱', boost: '🚀', watch: '👀' };
+        box.innerHTML = `<div class="hint" style="margin-bottom:6px">Разобрано исходов: ${d.outcomes} · правила: ≥${d.thresholds.hard_sample} и wr<${d.thresholds.block_wr}% → блок · ≥${d.thresholds.min_sample} и wr<${d.thresholds.tighten_wr}% → порог ↑ · wr≥${d.thresholds.boost_wr}% → порог ↓</div>` +
+            syms.map(sym => `<div style="margin:4px 0"><b style="font-family:var(--mono);font-size:12px">${sym}</b>: ` +
+                rules[sym].map(r =>
+                    `<span class="ms-chip" title="выборка ${r.sample}, Σ ${r.total_pnl_pct}%">${icon[r.action] || ''} ${r.side} · ${esc(r.stype)} · wr ${r.winrate}% <span style="color:var(--muted)">${r.action === 'block' ? '— глушится' : r.action === 'tighten' ? '— порог ↑' : r.action === 'boost' ? '— порог ↓' : '— наблюдаем'}</span></span>`
+                ).join('') + '</div>').join('');
+    } catch (e) { /* тихо */ }
+}
+$('learn-refresh') && $('learn-refresh').addEventListener('click', loadLearned);
+$('learn-reset') && $('learn-reset').addEventListener('click', async () => {
+    try { await API.post('/api/signals/learned/reset', {}); loadLearned(); toast('🧠 Статистика обучения стёрта'); }
+    catch (e) { toast('❌ ' + e.message); }
+});
+loadLearned();
+
+
 function buildSbtCfg() {
     const box = $('sbt-symbols');
     if (!box) return;
@@ -1150,7 +1224,7 @@ $('pf-mystrat-btn').addEventListener('click', async () => {
     const b = $('pf-mystrat-btn');
     b.disabled = true; b.textContent = '⏳ вывожу…';
     try {
-        const ms = await API.post(`/api/portfolio/my-strategy?days=${pfDays}`, {});
+        const ms = await API.post(`/api/portfolio/my-strategy?${pfQuery()}`, {});
         renderMyStrategy(ms);
         toast('🎯 Стратегия выведена из ваших сделок и подключена к сканеру');
     } catch (e) {

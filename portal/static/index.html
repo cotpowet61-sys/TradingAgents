@@ -100,6 +100,17 @@
                 </div>
                 <div class="panel-body" id="sbt-body" style="display:none;max-height:600px;overflow:auto"></div>
             </div>
+            <div class="panel" style="flex:0 0 auto">
+                <div class="panel-head">🧠 Обучение сканера
+                    <span class="sub">разбирает исход каждого сигнала по монете → глушит проигрышные комбинации, подстраивает порог · 0 AI-токенов</span>
+                    <div class="spacer"></div>
+                    <button class="btn" id="learn-refresh">⟳</button>
+                    <button class="btn" id="learn-reset" title="Стереть всю накопленную статистику обучения">сброс</button>
+                </div>
+                <div class="panel-body" style="max-height:190px;overflow:auto">
+                    <div class="empty" id="learn-body">Статистика появится после первых закрытых сигналов (TP/SL/таймаут/разворот).</div>
+                </div>
+            </div>
             <div class="feed" id="feed"></div>
         </section>
 
@@ -116,6 +127,12 @@
                             <button data-days="180">180д</button>
                             <button data-days="365">365д</button>
                         </div>
+                        <div class="pf-dates" id="pf-dates">
+                            <input type="date" id="pf-from" title="С даты (включительно)">
+                            <span style="color:var(--muted)">—</span>
+                            <input type="date" id="pf-to" title="По дату (включительно)">
+                            <button class="btn" id="pf-dates-clear" title="Сбросить ручной диапазон" style="padding:3px 9px">↺</button>
+                        </div>
                         <button class="btn" id="pf-reload">⟳ Обновить</button>
                         <button class="btn" id="pf-dna-btn" title="Числовой разбор каждой сделки на графике (0 токенов)">🧬 ДНК торговли</button>
                         <button class="btn" id="pf-persona-btn" title="Все агенты анализируют вашу ДНК → профиль вашей торговли (AI)">🔮 Персона (AI)</button>
@@ -123,6 +140,7 @@
                         <button class="btn btn-accent" id="pf-ai-btn">🤖 AI-разбор торговли</button>
                     </div>
                     <div id="mystrat-body" class="mystrat hidden"></div>
+                    <div id="pf-loading" class="loader hidden"><div class="spin"></div><span id="pf-loading-text">Загружаю сделки…</span></div>
                     <div class="panel-body" id="pf-body" style="overflow:visible">
                         <div class="empty" id="pf-empty">
                             Введите <b>read-only</b> ключи Bybit в Настройках — или перетащите сюда CSV-экспорт сделок.

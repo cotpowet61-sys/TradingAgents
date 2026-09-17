@@ -143,44 +143,57 @@ def _write_cache(trades: List[dict], fetched_days: int) -> None:
                    "trades": trades}, f, ensure_ascii=False)
 
 
-async def load_trades(days: int = 90, force: bool = False) -> dict:
+async def load_trades(days: int = 90, force: bool = False,
+                      from_ts: int = 0, to_ts: int = 0) -> dict:
     """Bybit API → файловый кэш с инкрементальной догрузкой → иначе CSV.
 
-    Первая загрузка `days` дней — полная. Дальше при каждом обращении
-    докачиваются только сделки с момента последней синхронизации
-    (+2 суток перекрытия), кэш склеивается с дедупликацией.
-    force=True — полная перезагрузка за `days` дней (мимо кэша).
+    Первая загрузка — полная. Дальше докачивается только хвост
+    (+2 суток перекрытия, дедуп). force=True — полная перезагрузка.
+    from_ts/to_ts (мс) — ручной диапазон дат: тогда окно выдачи = [from_ts, to_ts],
+    а глубина скачивания считается от from_ts до сейчас.
     """
     if settings.has_bybit_keys():
+        now_ms = int(time.time() * 1000)
+        D = 86_400_000
+        custom = bool(from_ts and to_ts and from_ts < to_ts)
+        frm = from_ts if custom else now_ms - days * D
+        to = to_ts if custom else now_ms
+        # календарный пол кэша: что уже скачано (6 ч допуска против дребезга суток)
         cache = _read_cache()
         cached: List[dict] = cache.get("trades") or []
         fetched_days = int(cache.get("fetched_days") or 0)
+        cache_floor = now_ms - fetched_days * D if fetched_days else now_ms
+        need_days = int(max(1, min(400, -(-(now_ms - frm) // D)))) if custom else days
+        deeper = custom and frm < cache_floor - 6 * 3_600_000
 
-        if force or not cached or days > fetched_days:
-            closed = await fetch_closed_pnl(days=days)
+        if force or not cached or (not custom and need_days > fetched_days) or deeper:
+            closed = await fetch_closed_pnl(days=need_days)
             trades = normalize_closed_pnl(closed)
-            _write_cache(trades, days)
-            return {"trades": trades, "source": "bybit_api", "count": len(trades),
-                    "cache": "full"}
+            _write_cache(trades, need_days)
+            cached = trades
+            cache_mode, cache_added, fetched_days = "full", len(trades), need_days
+        else:
+            cache_mode = "incremental"
+            # инкремент докачиваем, только если окно упирается в «сейчас»
+            cache_added = 0
+            if to >= now_ms - _OVERLAP_MS:
+                last_ts = max((t.get("close_ts") or 0) for t in cached) or now_ms
+                gap_ms = now_ms - min(last_ts + _OVERLAP_MS, now_ms)
+                add_days = min(max(2, -(-gap_ms // D)), 400)
+                closed = await fetch_closed_pnl(days=int(add_days))
+                fresh = normalize_closed_pnl(closed)
+                seen = {_trade_key(t) for t in cached}
+                added = [t for t in fresh if _trade_key(t) not in seen]
+                if added:
+                    cached = sorted(cached + added, key=lambda t: t.get("close_ts") or 0)
+                    _write_cache(cached, fetched_days)
+                cache_added = len(added)
 
-        # инкремент: докачиваем хвост от последней синхронизации
-        now_ms = int(time.time() * 1000)
-        last_ts = max((t.get("close_ts") or 0) for t in cached) or now_ms
-        gap_ms = now_ms - min(last_ts + _OVERLAP_MS, now_ms)
-        add_days = min(max(2, -(-gap_ms // 86_400_000)), 400)
-        closed = await fetch_closed_pnl(days=int(add_days))
-        fresh = normalize_closed_pnl(closed)
-        seen = {_trade_key(t) for t in cached}
-        added = [t for t in fresh if _trade_key(t) not in seen]
-        if added:
-            merged = sorted(cached + added, key=lambda t: t.get("close_ts") or 0)
-            _write_cache(merged, fetched_days)
-            cached = merged
-        cutoff = now_ms - days * 86_400_000
-        window = [t for t in cached if (t.get("close_ts") or 0) >= cutoff]
+        window = [t for t in cached if frm <= (t.get("close_ts") or 0) <= to]
         return {"trades": window, "source": "bybit_api", "count": len(window),
-                "cache": "incremental", "cache_added": len(added),
-                "cache_total": len(cached)}
+                "cache": cache_mode, "cache_added": cache_added,
+                "cache_total": len(cached),
+                "span_days": max(1, round((to - frm) / D))}
 
     if os.path.exists(CSV_PATH):
         with open(CSV_PATH, "r", encoding="utf-8") as f:
