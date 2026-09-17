@@ -425,3 +425,169 @@ def build_persona_preamble(dna: dict) -> str:
         "best_deals": best,
     }
     return _json.dumps(payload, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------- #
+# «Моя стратегия» — вывод правил торговли пользователя из его сделок.
+# Логический портрет: ЧТО торговать, КУДА, КОГДА, с какими TP/SL и TF.
+# Математика локальная (0 AI-токенов).
+# ---------------------------------------------------------------------- #
+MYSTRATEGY_PATH = os.path.join(DATA_DIR, "my_strategy.json")
+
+_HOLD2TF = {"<15 мин": "1m", "15-60 мин": "5m", "1-4 ч": "30m", ">4 ч": "1h"}
+
+
+def _median(xs: List[float]) -> Optional[float]:
+    xs = sorted(x for x in xs if x is not None)
+    if not xs:
+        return None
+    n = len(xs)
+    return xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2
+
+
+def _pct_move(t: dict) -> Optional[float]:
+    """Ход цены по сделке в % (знак учитывает сторону: >0 = сделка в плюс)."""
+    e, x = t.get("entry") or 0, t.get("exit") or 0
+    if not e or not x:
+        return None
+    mv = (x - e) / e * 100
+    if (t.get("side") or "").upper() in ("SELL", "SHORT"):
+        mv = -mv
+    return mv
+
+
+def derive_my_strategy(dna: dict, trades: List[dict]) -> dict:
+    """Строит персональную стратегию из ДНК и сырых сделок."""
+    by_symbol = dna.get("by_symbol") or {}
+    by_side = dna.get("by_side") or {}
+    by_hold = dna.get("by_hold") or {}
+    by_session = dna.get("by_session") or {}
+
+    # 1) Монеты: рабочие (winrate>=50, выборка>=3), топ-5 по частоте
+    good_syms = [{"symbol": k, "trades": v.get("trades", 0), "winrate": v.get("winrate", 0),
+                  "pnl": v.get("pnl", 0)}
+                 for k, v in by_symbol.items() if v.get("trades", 0) >= 3 and v.get("winrate", 0) >= 50]
+    good_syms.sort(key=lambda r: (-r["trades"], -r["pnl"]))
+    top_symbols = good_syms[:5]
+    if not top_symbols:  # fallback: просто самые торгуемые
+        top_symbols = sorted(({"symbol": k, "trades": v.get("trades", 0),
+                               "winrate": v.get("winrate", 0), "pnl": v.get("pnl", 0)}
+                              for k, v in by_symbol.items()),
+                             key=lambda r: -r["trades"])[:3]
+
+    # 2) Сторона: доминирующая по частоте и winrate
+    lng, sht = by_side.get("лонг") or {}, by_side.get("шорт") or {}
+    lt, st = lng.get("trades", 0), sht.get("trades", 0)
+    side = "ОБЕ"
+    if lt + st:
+        if lt / (lt + st) >= 0.6 and lng.get("winrate", 0) >= 48:
+            side = "LONG"
+        elif st / (lt + st) >= 0.6 and sht.get("winrate", 0) >= 48:
+            side = "SHORT"
+    side_detail = f"лонг {lt} сделок (wr {lng.get('winrate', 0)}%) / шорт {st} (wr {sht.get('winrate', 0)}%)"
+
+    # 3) Сессия: лучшая с приличной выборкой
+    session = None
+    sess_ok = [(k, v) for k, v in by_session.items() if v.get("trades", 0) >= 3]
+    if sess_ok:
+        session = max(sess_ok, key=lambda kv: (kv[1].get("winrate", 0), kv[1].get("trades", 0)))[0]
+
+    # 4) Таймфрейм: из лучшего бакета удержания
+    tf = "5m"
+    hold_ok = [(k, v) for k, v in by_hold.items() if v.get("trades", 0) >= 3]
+    if hold_ok:
+        best_hold = max(hold_ok, key=lambda kv: (kv[1].get("winrate", 0), kv[1].get("trades", 0)))[0]
+        tf = _HOLD2TF.get(best_hold, "5m")
+    else:
+        best_hold = None
+
+    # 5) TP/SL/удержание — медианы реальных ходов цены
+    wins, losses, holds = [], [], []
+    for t in trades:
+        mv = _pct_move(t)
+        if mv is None:
+            continue
+        (wins if t.get("pnl", 0) > 0 else losses).append(abs(mv))
+        o, c = t.get("open_ts"), t.get("close_ts")
+        if o and c and c > o:
+            holds.append((c - o) / 60_000)
+    tp_pct = round(min(8.0, max(0.5, (_median(sorted(wins)) or 2.0) * 1.15)), 1) if wins else 2.0
+    sl_pct = round(min(4.0, max(0.3, (_median(sorted(losses)) or 1.0) * 0.9)), 1) if losses else 1.0
+    hold_min = round(_median(holds) or 60)
+
+    rr = round(tp_pct / sl_pct, 2) if sl_pct else None
+    syms_txt = ", ".join(s["symbol"].replace("USDT", "") for s in top_symbols) or "—"
+    rules = [
+        f"Инструменты: {syms_txt}",
+        f"Направление: {side} ({side_detail})",
+        f"Рабочий таймфрейм: {tf}" + (f" (лучшее удержание: {best_hold})" if best_hold else ""),
+        f"Цели: TP ≈ {tp_pct}% / SL ≈ {sl_pct}%" + (f" (RR {rr})" if rr else ""),
+        f"Удержание: ≈ {hold_min} мин (медиана)",
+    ]
+    if session:
+        rules.append(f"Лучшая сессия: {session}")
+    avoid = [w.get("zone") for w in (dna.get("weaknesses") or [])[:4] if w.get("zone")]
+
+    return {
+        "name": "Моя стратегия v1",
+        "built_at": int(time.time()),
+        "days": dna.get("days"),
+        "base_trades": len(trades),
+        "top_symbols": top_symbols,
+        "symbols": [s["symbol"] for s in top_symbols],
+        "side": side,
+        "side_detail": side_detail,
+        "session": session,
+        "tf": tf,
+        "tp_pct": tp_pct,
+        "sl_pct": sl_pct,
+        "rr": rr,
+        "hold_min": hold_min,
+        "rules": rules,
+        "avoid": avoid,
+    }
+
+
+def save_my_strategy(ms: dict) -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(MYSTRATEGY_PATH, "w", encoding="utf-8") as f:
+        json.dump(ms, f, ensure_ascii=False)
+
+
+def load_my_strategy() -> Optional[dict]:
+    try:
+        with open(MYSTRATEGY_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def my_strategy_mtime() -> float:
+    try:
+        return os.path.getmtime(MYSTRATEGY_PATH)
+    except OSError:
+        return 0.0
+
+
+def match_my_strategy(ms: Optional[dict], symbol: str, side: str, tf: str) -> Optional[dict]:
+    """Совпадение live-сигнала с персональной стратегией (x из y правил)."""
+    if not ms:
+        return None
+    hits, total, notes = 0, 0, []
+    syms = ms.get("symbols") or []
+    if syms:
+        total += 1
+        if symbol in syms:
+            hits += 1
+            notes.append("монета из вашего пула")
+    if ms.get("side") in ("LONG", "SHORT"):
+        total += 1
+        if side == ms["side"]:
+            hits += 1
+            notes.append("сторона совпала с вашим уклоном")
+    if ms.get("tf"):
+        total += 1
+        if tf == ms["tf"]:
+            hits += 1
+            notes.append(f"ваш рабочий TF {tf}")
+    return {"hits": hits, "total": total, "notes": notes} if total else None

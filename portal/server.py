@@ -170,9 +170,11 @@ def _ev(event: str, data: dict) -> str:
 # Мои сделки
 # ---------------------------------------------------------------------- #
 @app.get("/api/portfolio/overview")
-async def portfolio_overview(days: int = 90):
+async def portfolio_overview(days: int = 90, full: bool = False):
+    """full=true — полная перезагрузка истории за days дней (мимо кэша);
+    иначе — файловый кэш + докачка только новых сделок."""
     try:
-        data = await ta_mod.load_trades(days=days)
+        data = await ta_mod.load_trades(days=days, force=full)
     except BybitAuthError as e:
         raise HTTPException(400, str(e))
     stats = ta_mod.compute_stats(data["trades"], days=days)
@@ -181,7 +183,45 @@ async def portfolio_overview(days: int = 90):
         "stats": stats,
         "recent": ta_mod.recent_brief(data["trades"], 25),
         "agents_enabled": settings.role_enabled("portfolio"),
+        "cache": {"mode": data.get("cache", "csv" if data["source"] == "csv" else "full"),
+                  "added": data.get("cache_added", 0),
+                  "total": data.get("cache_total", data["count"])},
     }
+
+
+# ---------------------------------------------------------------------- #
+# «Моя стратегия» — правила, выведенные из ваших сделок (0 AI-токенов)
+# ---------------------------------------------------------------------- #
+@app.get("/api/portfolio/my-strategy")
+async def my_strategy_get():
+    import trade_context as tc
+    ms = tc.load_my_strategy()
+    if not ms:
+        return {"empty": True,
+                "hint": "Стратегия ещё не выведена — нажмите «🎯 Моя стратегия» на вкладке «Мои сделки»."}
+    return ms
+
+
+@app.post("/api/portfolio/my-strategy")
+async def my_strategy_build(days: int = 90):
+    """Выводит персональную стратегию из ДНК (нужна построенная ДНК за этот период)."""
+    import trade_context as tc
+    dna = tc.load_dna()
+    if not dna:
+        raise HTTPException(400, "Сначала постройте ДНК торговли (кнопка 🧬) — стратегия выводится из неё.")
+    if dna.get("days") != days:
+        raise HTTPException(400, f"ДНК построена за {dna.get('days')} дн., а выбрано {days} — "
+                                 f"перестройте ДНК за этот период или выберите его снова.")
+    try:
+        data = await ta_mod.load_trades(days=days)
+    except BybitAuthError as e:
+        raise HTTPException(400, str(e))
+    trades = data["trades"]
+    if len(trades) < 5:
+        raise HTTPException(400, f"Слишком мало сделок ({len(trades)}) для вывода стратегии — нужно хотя бы 5.")
+    ms = tc.derive_my_strategy(dna, trades)
+    tc.save_my_strategy(ms)
+    return ms
 
 
 @app.post("/api/portfolio/csv")

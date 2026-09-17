@@ -98,10 +98,25 @@ class LiveEngine:
                 print(f"[portal-live] ошибка сканирования: {e}")
             await asyncio.sleep(max(5, settings.SCAN_INTERVAL_SECONDS))
 
+    def _fresh_my_strategy(self):
+        """Персональная стратегия из my_strategy.json, с перечитыванием по mtime."""
+        try:
+            from trade_context import load_my_strategy, my_strategy_mtime
+            mt = my_strategy_mtime()
+            if mt and mt != getattr(self, "_mystrat_mtime", None):
+                self._mystrat = load_my_strategy()
+                self._mystrat_mtime = mt
+            elif not mt:
+                self._mystrat = None
+                self._mystrat_mtime = None
+        except Exception:
+            self._mystrat = getattr(self, "_mystrat", None)
+        return getattr(self, "_mystrat", None)
+
     async def scan_once(self):
         market = get_market()
         symbols = settings.watchlist
-        tf = settings.DEFAULT_TIMEFRAME
+        tfs = settings.signal_timeframes
         sel = get_selector()
 
         # тикеры (для карточек)
@@ -121,7 +136,7 @@ class LiveEngine:
 
         sem = asyncio.Semaphore(4)
 
-        async def one(sym):
+        async def one(sym, tf):
             async with sem:
                 try:
                     candles = await market.get_klines(sym, tf, limit=300)
@@ -141,21 +156,36 @@ class LiveEngine:
                         return
                     # персонализация под вашу историю (ДНК; 0 токенов)
                     fit = None
-                    tp2, sl2, rr_free = sig.tp, sig.sl, False
+                    tp2, sl2, rr_free, risk_manual = sig.tp, sig.sl, False, False
+                    hold_min = None
+                    mystrat_hit = None
                     try:
-                        from trade_context import fit_score, _regime
+                        from trade_context import fit_score, _regime, match_my_strategy
                         dna = self._fresh_dna()
                         summ = ta.compute_feature_summary(candles) or {}
                         regime = _regime([c.close for c in candles])
                         fit = fit_score(dna, sym, sig.side.value,
                                         rsi=(summ or {}).get("rsi"), regime=regime)
-                        # Правило 2/1 снято → цели по волатильности графика (ATR)
-                        if not settings.RR_BINDING:
+                        mystrat_hit = match_my_strategy(self._fresh_my_strategy(),
+                                                        sym, sig.side.value, tf)
+                        e = sig.entry
+                        # Приоритет целей: 1) ручной риск-фактор → 2) ATR (2:1 выкл) → 3) дефолт стратегии
+                        if settings.manual_risk and e:
+                            tp_m, sl_m = settings.MANUAL_TP_PCT, settings.MANUAL_SL_PCT
+                            if sig.side.value == "LONG":
+                                tp2 = e * (1 + tp_m / 100)
+                                sl2 = e * (1 - sl_m / 100)
+                            else:
+                                tp2 = e * (1 - tp_m / 100)
+                                sl2 = e * (1 + sl_m / 100)
+                            risk_manual = True
+                            hold_min = settings.MANUAL_HOLD_MIN or None
+                        elif not settings.RR_BINDING:
+                            # Правило 2/1 снято → цели по волатильности графика (ATR)
                             atr_pct = (summ or {}).get("atr_pct") or 0.0
-                            if atr_pct > 0 and sig.entry:
+                            if atr_pct > 0 and e:
                                 tp_move = min(6.0, max(0.4, 2.0 * atr_pct))
                                 sl_move = min(4.0, max(0.25, 1.2 * atr_pct))
-                                e = sig.entry
                                 if sig.side.value == "LONG":
                                     tp2 = e * (1 + tp_move / 100)
                                     sl2 = e * (1 - sl_move / 100)
@@ -168,6 +198,9 @@ class LiveEngine:
                     event = {
                         "fit": fit,
                         "rr_free": rr_free,
+                        "risk_manual": risk_manual,
+                        "hold_min": hold_min,
+                        "my_strategy": mystrat_hit,
                         "type": "signal",
                         "symbol": sym,
                         "timeframe": tf,
@@ -181,19 +214,20 @@ class LiveEngine:
                         "reason": sig.reason,
                         "ts": int(time.time() * 1000),
                     }
-                    key = f"{sym}:{sig.side.value}"
+                    # антиспам: по паре (монета, сторона, TF) чаще 5 минут не повторяем
                     if self.feed and self.feed[-1].get("symbol") == sym and \
                             self.feed[-1].get("side") == sig.side.value and \
+                            self.feed[-1].get("timeframe") == tf and \
                             time.time() - self.feed[-1].get("ts", 0) / 1000 < 300:
-                        return  # не спамим одинаковым сигналом подряд чаще 5 минут
+                        return
                     self.feed.append(event)
                     self.feed = self.feed[-MAX_FEED:]
                     await self.broadcast(event)
-                    print(f"[portal-live] сигнал {sym} {sig.side.value} conf={sig.confidence:.2f} ({strat.name})")
+                    print(f"[portal-live] сигнал {sym} {tf} {sig.side.value} conf={sig.confidence:.2f} ({strat.name})")
                 except Exception:
                     return
 
-        await asyncio.gather(*(one(s) for s in symbols))
+        await asyncio.gather(*(one(s, tf) for s in symbols for tf in tfs))
         self.last_scan = time.time()
 
     def state(self) -> dict:
@@ -202,6 +236,7 @@ class LiveEngine:
             "watchlist": settings.watchlist,
             "interval_seconds": settings.SCAN_INTERVAL_SECONDS,
             "timeframe": settings.DEFAULT_TIMEFRAME,
+            "timeframes": settings.signal_timeframes,
             "last_scan": self.last_scan,
             "feed_count": len(self.feed),
         }

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import os
 import time
 from collections import defaultdict
@@ -109,14 +110,77 @@ def _parse_ts(s: Optional[str]) -> Optional[int]:
 
 
 # ---------------------------------------------------------------------- #
-# Загрузка сделок
+# Загрузка сделок (с файловым кэшем и инкрементальной догрузкой)
 # ---------------------------------------------------------------------- #
-async def load_trades(days: int = 90) -> dict:
-    """Bybit API (если ключи есть) → иначе сохранённый CSV."""
+CACHE_PATH = os.path.join(DATA_DIR, "trades_cache.json")
+_OVERLAP_MS = 2 * 86_400_000  # перекрытие окна догрузки (защита от поздних апдейтов)
+
+
+def _trade_key(t: dict) -> str:
+    return "|".join(str(t.get(k)) for k in
+                    ("symbol", "side", "qty", "entry", "exit", "pnl", "close_ts"))
+
+
+def _read_cache() -> dict:
+    if not os.path.exists(CACHE_PATH):
+        return {}
+    try:
+        with open(CACHE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data.get("trades"), list):
+            return data
+    except Exception:
+        pass
+    return {}
+
+
+def _write_cache(trades: List[dict], fetched_days: int) -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(CACHE_PATH, "w", encoding="utf-8") as f:
+        json.dump({"fetched_days": fetched_days,
+                   "synced_at": int(time.time() * 1000),
+                   "count": len(trades),
+                   "trades": trades}, f, ensure_ascii=False)
+
+
+async def load_trades(days: int = 90, force: bool = False) -> dict:
+    """Bybit API → файловый кэш с инкрементальной догрузкой → иначе CSV.
+
+    Первая загрузка `days` дней — полная. Дальше при каждом обращении
+    докачиваются только сделки с момента последней синхронизации
+    (+2 суток перекрытия), кэш склеивается с дедупликацией.
+    force=True — полная перезагрузка за `days` дней (мимо кэша).
+    """
     if settings.has_bybit_keys():
-        closed = await fetch_closed_pnl(days=days)
-        trades = normalize_closed_pnl(closed)
-        return {"trades": trades, "source": "bybit_api", "count": len(trades)}
+        cache = _read_cache()
+        cached: List[dict] = cache.get("trades") or []
+        fetched_days = int(cache.get("fetched_days") or 0)
+
+        if force or not cached or days > fetched_days:
+            closed = await fetch_closed_pnl(days=days)
+            trades = normalize_closed_pnl(closed)
+            _write_cache(trades, days)
+            return {"trades": trades, "source": "bybit_api", "count": len(trades),
+                    "cache": "full"}
+
+        # инкремент: докачиваем хвост от последней синхронизации
+        now_ms = int(time.time() * 1000)
+        last_ts = max((t.get("close_ts") or 0) for t in cached) or now_ms
+        gap_ms = now_ms - min(last_ts + _OVERLAP_MS, now_ms)
+        add_days = min(max(2, -(-gap_ms // 86_400_000)), 400)
+        closed = await fetch_closed_pnl(days=int(add_days))
+        fresh = normalize_closed_pnl(closed)
+        seen = {_trade_key(t) for t in cached}
+        added = [t for t in fresh if _trade_key(t) not in seen]
+        if added:
+            merged = sorted(cached + added, key=lambda t: t.get("close_ts") or 0)
+            _write_cache(merged, fetched_days)
+            cached = merged
+        cutoff = now_ms - days * 86_400_000
+        window = [t for t in cached if (t.get("close_ts") or 0) >= cutoff]
+        return {"trades": window, "source": "bybit_api", "count": len(window),
+                "cache": "incremental", "cache_added": len(added),
+                "cache_total": len(cached)}
 
     if os.path.exists(CSV_PATH):
         with open(CSV_PATH, "r", encoding="utf-8") as f:
@@ -190,7 +254,7 @@ def compute_stats(trades: List[dict], days: int = 90) -> dict:
             patterns.append(f"Средний убыток ({avg_loss:.2f}) заметно больше среднего профита ({avg_win:.2f}) — похоже, убыточные сделки пересиживаются.")
     if sym_rows and sym_rows[0]["pnl"] < 0:
         patterns.append(f"Худшая монета: {sym_rows[0]['symbol']} ({sym_rows[0]['pnl']} USDT за период).")
-    if len(trades) / max(days, 1) > settings.MAX_TRADES_PER_DAY:
+    if settings.MAX_TRADES_PER_DAY > 0 and len(trades) / max(days, 1) > settings.MAX_TRADES_PER_DAY:
         patterns.append("Среднее число сделок в день выше вашего лимита — возможна овертрейдинговость.")
     long_n = sum(1 for t in trades if t["side"] in ("Buy", "LONG"))
     short_n = sum(1 for t in trades if t["side"] in ("Sell", "SHORT"))

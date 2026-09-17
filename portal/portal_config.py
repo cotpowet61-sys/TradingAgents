@@ -74,6 +74,9 @@ class PortalSettings(BaseSettings):
     WATCHLIST: str = "BTCUSDT,ETHUSDT,SOLUSDT,LSKUSDT"
     SCAN_INTERVAL_SECONDS: int = 30
     DEFAULT_TIMEFRAME: str = "5m"
+    # Таймфреймы сканера через запятую (1m,3m,5m,15m,30m,1h,4h).
+    # Пусто = только DEFAULT_TIMEFRAME.
+    SIGNAL_TIMEFRAMES: str = "5m"
     MIN_CONFIDENCE: float = 0.55
     SIGNAL_STRATEGY: str = "auto"     # auto = авто-подбор по графику (как в анализе)
     # Звук/всплывашки хранятся на клиенте, но дефолты можно задать здесь
@@ -82,9 +85,15 @@ class PortalSettings(BaseSettings):
     # Привязка правила TP≥2% / SL 1% (RR 2:1) к live-сигналам.
     # False = цели считаются по ATR свежего графика (сигналы «дышат» под волу).
     RR_BINDING: bool = True
+    # Ручной риск-фактор: если TP и SL > 0 — сигналы получают именно эти цели
+    # (приоритет над привязкой 2:1 и над ATR). 0 = выключено.
+    MANUAL_TP_PCT: float = 0.0
+    MANUAL_SL_PCT: float = 0.0
+    MANUAL_HOLD_MIN: float = 0.0     # целевая длительность сделки, мин (0 = не задано)
 
     # Правила дэйтрейдинга (для отображения и контекста агентов)
-    MAX_TRADES_PER_DAY: int = 30
+    # 0 = без лимита (пользователь снял границу 30/день).
+    MAX_TRADES_PER_DAY: int = 0
     MIN_TP_PCT: float = 2.0
     MAX_HOLD_HOURS: float = 4.0
     DEFAULT_SL_PCT: float = 1.0
@@ -102,6 +111,18 @@ class PortalSettings(BaseSettings):
     @property
     def watchlist(self) -> List[str]:
         return [s.strip().upper() for s in self.WATCHLIST.split(",") if s.strip()]
+
+    _VALID_TFS = ("1m", "3m", "5m", "15m", "30m", "1h", "4h")
+
+    @property
+    def signal_timeframes(self) -> List[str]:
+        tfs = [t.strip() for t in (self.SIGNAL_TIMEFRAMES or "").split(",")
+               if t.strip() in self._VALID_TFS]
+        return tfs or [self.DEFAULT_TIMEFRAME]
+
+    @property
+    def manual_risk(self) -> bool:
+        return self.MANUAL_TP_PCT > 0 and self.MANUAL_SL_PCT > 0
 
     def role_model(self, role: str) -> Dict[str, Any]:
         m = getattr(self, f"MODEL_{role.upper()}", "") or "gpt-6-astra"
@@ -143,11 +164,18 @@ class PortalSettings(BaseSettings):
                 "watchlist": self.watchlist,
                 "scan_interval_seconds": self.SCAN_INTERVAL_SECONDS,
                 "timeframe": self.DEFAULT_TIMEFRAME,
+                "signal_timeframes": self.signal_timeframes,
                 "min_confidence": self.MIN_CONFIDENCE,
                 "signal_strategy": self.SIGNAL_STRATEGY,
                 "notify_sound": self.NOTIFY_SOUND,
                 "notify_toasts": self.NOTIFY_TOASTS,
                 "rr_binding": self.RR_BINDING,
+                "manual_risk": {
+                    "enabled": self.manual_risk,
+                    "tp_pct": self.MANUAL_TP_PCT,
+                    "sl_pct": self.MANUAL_SL_PCT,
+                    "hold_min": self.MANUAL_HOLD_MIN,
+                },
             },
             "rules": {
                 "max_trades_per_day": self.MAX_TRADES_PER_DAY,
@@ -169,6 +197,10 @@ class PortalSettings(BaseSettings):
         "watchlist": ("WATCHLIST", "WATCHLIST"),
         "scan_interval_seconds": ("SCAN_INTERVAL_SECONDS", "SCAN_INTERVAL_SECONDS"),
         "default_timeframe": ("DEFAULT_TIMEFRAME", "DEFAULT_TIMEFRAME"),
+        "signal_timeframes": ("SIGNAL_TIMEFRAMES", "SIGNAL_TIMEFRAMES"),
+        "manual_tp_pct": ("MANUAL_TP_PCT", "MANUAL_TP_PCT"),
+        "manual_sl_pct": ("MANUAL_SL_PCT", "MANUAL_SL_PCT"),
+        "manual_hold_min": ("MANUAL_HOLD_MIN", "MANUAL_HOLD_MIN"),
         "min_confidence": ("MIN_CONFIDENCE", "MIN_CONFIDENCE"),
         "signal_strategy": ("SIGNAL_STRATEGY", "SIGNAL_STRATEGY"),
         "notify_sound": ("NOTIFY_SOUND", "NOTIFY_SOUND"),

@@ -383,3 +383,24 @@ main { flex: 1; min-height: 0; display: flex; }
     .pf-cols { grid-template-columns: 1fr; }
     nav button { padding: 8px 10px; font-size: 12px; }
 }
+
+/* --- Таймфрейм-чипы и ручной риск (Настройки) --- */
+.tf-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.tf-chips .chk { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border: 1px solid var(--stroke); border-radius: 9px; background: var(--glass); cursor: pointer; font-size: 12px; transition: all .2s; }
+.tf-chips .chk:has(input:checked) { border-color: var(--accent,#8f7bff); background: rgba(143,123,255,.16); box-shadow: 0 0 10px rgba(143,123,255,.18); }
+.tf-chips input { accent-color: #8f7bff; margin: 0; }
+.risk-row { display: flex; gap: 8px; }
+.risk-row input { width: 86px; }
+
+/* --- Блок «Моя стратегия» --- */
+.mystrat { margin: 10px 14px 0; padding: 13px 16px; border: 1px solid var(--stroke2); border-radius: 14px;
+    background: linear-gradient(135deg, rgba(143,123,255,.10), rgba(0,224,164,.06));
+    animation: panelBreathe 7s ease-in-out infinite; }
+.mystrat.hidden { display: none; }
+.mystrat .ms-head { display: flex; align-items: center; gap: 10px; font-size: 13.5px; font-weight: 650; }
+.mystrat .ms-head .badge { font-size: 10.5px; padding: 2px 9px; border-radius: 8px; background: rgba(0,224,164,.15); border: 1px solid rgba(0,224,164,.35); color: #7de9c3; }
+.mystrat ul { margin: 8px 0 2px; padding-left: 19px; font-size: 12.5px; line-height: 1.65; }
+.mystrat .ms-avoid { margin-top: 7px; font-size: 11.5px; color: var(--muted); }
+.mystrat .ms-avoid b { color: #ff9fae; font-weight: 550; }
+.ms-chip { display: inline-block; margin: 2px 3px 0 0; padding: 1px 8px; border-radius: 8px; font-size: 11px;
+    background: var(--glass); border: 1px solid var(--stroke); }

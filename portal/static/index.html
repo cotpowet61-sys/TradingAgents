@@ -94,8 +94,10 @@
                         <button class="btn" id="pf-reload">⟳ Обновить</button>
                         <button class="btn" id="pf-dna-btn" title="Числовой разбор каждой сделки на графике (0 токенов)">🧬 ДНК торговли</button>
                         <button class="btn" id="pf-persona-btn" title="Все агенты анализируют вашу ДНК → профиль вашей торговли (AI)">🔮 Персона (AI)</button>
+                        <button class="btn" id="pf-mystrat-btn" title="Выводит вашу личную стратегию из сделок: монеты/сторона/TF/TP/SL — и подключает её к сканеру (0 токенов)">🎯 Моя стратегия</button>
                         <button class="btn btn-accent" id="pf-ai-btn">🤖 AI-разбор торговли</button>
                     </div>
+                    <div id="mystrat-body" class="mystrat hidden"></div>
                     <div class="panel-body" id="pf-body" style="overflow:visible">
                         <div class="empty" id="pf-empty">
                             Введите <b>read-only</b> ключи Bybit в Настройках — или перетащите сюда CSV-экспорт сделок.
@@ -178,13 +180,29 @@
                             <datalist id="wl-symbols"></datalist>
                         </div>
                         <div class="kv"><label>Интервал сканера, сек</label><input type="number" id="set-scan-interval" min="10"></div>
-                        <div class="kv"><label>Таймфрейм сигналов</label>
-                            <select id="set-signal-tf"><option>1m</option><option>3m</option><option selected>5m</option><option>15m</option><option>30m</option><option>1h</option><option>4h</option></select>
+                        <div class="kv"><label>Таймфреймы сигналов</label>
+                            <div class="tf-chips" id="set-tf-chips">
+                                <label class="chk"><input type="checkbox" data-tf="1m">1m</label>
+                                <label class="chk"><input type="checkbox" data-tf="3m">3m</label>
+                                <label class="chk"><input type="checkbox" data-tf="5m" checked>5m</label>
+                                <label class="chk"><input type="checkbox" data-tf="15m">15m</label>
+                                <label class="chk"><input type="checkbox" data-tf="30m">30m</label>
+                                <label class="chk"><input type="checkbox" data-tf="1h">1h</label>
+                                <label class="chk"><input type="checkbox" data-tf="4h">4h</label>
+                            </div>
                         </div>
                         <div class="kv"><label>Порог уверенности (0-1)</label><input type="number" id="set-min-conf" step="0.05" min="0" max="1"></div>
                         <div class="kv"><label>Правило TP/SL</label>
                             <label class="chk" title="ВКЛ: классика мин.TP 2% / SL 1% (RR 2:1). ВЫКЛ: цели по волатильности (ATR) графика"><input type="checkbox" id="set-rr-binding"> привязка 2:1 (мин. TP 2%)</label>
                         </div>
+                        <div class="kv"><label>Ручной риск-фактор</label>
+                            <div class="risk-row">
+                                <input type="number" id="set-risk-tp" step="0.1" min="0" placeholder="TP %" title="Ручной TP в % (0 = выкл). Приоритет над привязкой 2:1 и ATR">
+                                <input type="number" id="set-risk-sl" step="0.1" min="0" placeholder="SL %" title="Ручной SL в % (0 = выкл)">
+                                <input type="number" id="set-risk-hold" step="5" min="0" placeholder="мин" title="Целевая длительность сделки, минут (0 = не задано)">
+                            </div>
+                        </div>
+                        <div class="hint" style="margin-top:-4px">TP/SL &gt; 0 → сигналы получают именно эти цели (приоритет над 2:1 и ATR). 0 = не вмешиваться.</div>
                         <div class="kv"><label>Стратегия сигналов</label>
                             <select id="set-signal-strategy"><option value="auto">⚡ auto — подбор по графику</option></select>
                         </div>
@@ -196,7 +214,8 @@
                 <div class="panel">
                     <div class="panel-head">🛡️ Правила и хранилище</div>
                     <div class="panel-body">
-                        <div class="kv"><label>Макс. сделок в день</label><input type="number" id="set-max-trades" min="1"></div>
+                        <div class="kv"><label>Макс. сделок в день</label><input type="number" id="set-max-trades" min="0" placeholder="0" title="0 = без лимита"></div>
+                        <div class="hint" style="margin-top:-4px">0 — без ограничений (лимит снят по запросу).</div>
                         <div class="kv"><label>Мин. Take-Profit, %</label><input type="number" id="set-min-tp" step="0.1" min="0.1"></div>
                         <div class="kv"><label>Макс. удержание, ч</label><input type="number" id="set-max-hold" step="0.5" min="0.5"></div>
                         <div class="kv"><label>Дефолт Stop-Loss, %</label><input type="number" id="set-sl" step="0.1" min="0.1"></div>

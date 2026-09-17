@@ -297,7 +297,7 @@ function signalCardHTML(s) {
             <span><b>TP</b><span style="color:var(--long)">${fmtPx(s.tp)}</span></span>
             <span><b>SL</b><span style="color:var(--short)">${fmtPx(s.sl)}</span></span>
         </div>
-        <div class="sc-strat">${esc(s.strategy)}${s.strategy_auto ? ' · <span class="auto">⚡ авто-подбор по графику</span>' : ''} · TF ${s.timeframe}${s.rr_free ? ' · <span style="color:var(--cyan)">TP/SL по ATR графика</span>' : ''}</div>
+        <div class="sc-strat">${esc(s.strategy)}${s.strategy_auto ? ' · <span class="auto">⚡ авто-подбор по графику</span>' : ''} · TF ${s.timeframe}${s.rr_free ? ' · <span style="color:var(--cyan)">TP/SL по ATR графика</span>' : ''}${s.risk_manual ? ' · <span style="color:var(--cyan)">🎛 ручной риск' + (s.hold_min ? ` · ⏱ ~${Math.round(s.hold_min)} мин` : '') + '</span>' : ''}${s.my_strategy && s.my_strategy.hits ? ` · <span style="color:#7de9c3">🎯 ваша стратегия ${s.my_strategy.hits}/${s.my_strategy.total}</span>` : ''}</div>
         ${s.reason ? `<div class="sc-strat" style="opacity:.8">${esc(s.reason)}</div>` : ''}
         <div class="conf-bar"><i style="width:${confPct}%"></i></div>
     </div>`;
@@ -407,10 +407,12 @@ document.querySelectorAll('#pf-period button').forEach(b =>
 async function loadPortfolio() {
     const empty = $('pf-empty'), content = $('pf-content');
     try {
-        const d = await API.get(`/api/portfolio/overview?days=${pfDays}`);
+        const d = await API.get(`/api/portfolio/overview?days=${pfDays}${loadPortfolio._full ? '&full=true' : ''}`);
+        loadPortfolio._full = false;
         const st = d.stats;
         $('pf-source').textContent = d.source === 'bybit_api'
-            ? '· данные: Bybit API (read-only)'
+            ? '· данные: Bybit API (read-only)' + (d.cache && d.cache.mode === 'incremental'
+                ? ` · кэш: +${d.cache.added} новых (всего ${d.cache.total})` : '')
             : '· данные: загруженный CSV';
         if (st.empty) { empty.style.display = ''; content.style.display = 'none'; return; }
         empty.style.display = 'none';
@@ -446,6 +448,7 @@ async function loadPortfolio() {
         // ДНК и персона подтягиваются параллельно
         loadDNA(false);
         loadPersona();
+        loadMyStrategy();
 
         // эквити
         const el = $('equity-chart');
@@ -777,9 +780,16 @@ function renderSettings(cfg) {
     $('set-ai-key').value = cfg.global_api_key;
     $('set-bb-key').value = cfg.bybit.api_key;
     $('set-scan-interval').value = cfg.live.scan_interval_seconds;
-    $('set-signal-tf').value = cfg.live.timeframe;
+    // мульти-таймфреймы сканера (чипы)
+    const tfs = cfg.live.signal_timeframes || [cfg.live.timeframe || '5m'];
+    document.querySelectorAll('#set-tf-chips input').forEach(i => { i.checked = tfs.includes(i.dataset.tf); });
     $('set-min-conf').value = cfg.live.min_confidence;
     $('set-max-trades').value = cfg.rules.max_trades_per_day;
+    // ручной риск-фактор
+    const mr = cfg.live.manual_risk || {};
+    if ($('set-risk-tp')) $('set-risk-tp').value = mr.tp_pct || 0;
+    if ($('set-risk-sl')) $('set-risk-sl').value = mr.sl_pct || 0;
+    if ($('set-risk-hold')) $('set-risk-hold').value = mr.hold_min || 0;
     $('set-min-tp').value = cfg.rules.min_tp_pct;
     $('set-max-hold').value = cfg.rules.max_hold_hours;
     $('set-sl').value = cfg.rules.default_sl_pct;
@@ -846,10 +856,19 @@ function collectUpdates() {
     const bk = v('set-bb-key'); if (bk && !bk.includes('…')) u.bybit_api_key = bk;
     const bs = v('set-bb-secret'); if (bs) u.bybit_api_secret = bs;
     u.scan_interval_seconds = parseInt(v('set-scan-interval')) || 30;
-    u.default_timeframe = v('set-signal-tf') || '5m';
+    // таймфреймы: собираем отмеченные чипы
+    const tfs = [...document.querySelectorAll('#set-tf-chips input:checked')].map(i => i.dataset.tf);
+    const tfList = tfs.length ? tfs : ['5m'];
+    u.signal_timeframes = tfList.join(',');
+    u.default_timeframe = tfList[0];
     u.min_confidence = parseFloat(v('set-min-conf')) || 0.55;
     u.signal_strategy = v('set-signal-strategy') || 'auto';
-    u.max_trades_per_day = parseInt(v('set-max-trades')) || 30;
+    const mt = parseInt(v('set-max-trades'));          // 0 = без лимита (важно не заменять дефолтом)
+    u.max_trades_per_day = isNaN(mt) ? 0 : mt;
+    // ручной риск-фактор
+    u.manual_tp_pct = parseFloat(v('set-risk-tp')) || 0;
+    u.manual_sl_pct = parseFloat(v('set-risk-sl')) || 0;
+    u.manual_hold_min = parseFloat(v('set-risk-hold')) || 0;
     u.min_tp_pct = parseFloat(v('set-min-tp')) || 2;
     u.max_hold_hours = parseFloat(v('set-max-hold')) || 4;
     u.default_sl_pct = parseFloat(v('set-sl')) || 1;
@@ -967,11 +986,53 @@ $('council-btn').addEventListener('click', runCouncil);
 $('council-close').addEventListener('click', closeCouncil);
 $('council-modal').addEventListener('click', e => { if (e.target === $('council-modal')) closeCouncil(); });
 $('pf-reload').addEventListener('click', loadPortfolio);
+// двойной клик по ⟳ = ПОЛНАЯ перезагрузка истории мимо кэша
+$('pf-reload').addEventListener('dblclick', () => { loadPortfolio._full = true; loadPortfolio(); });
 $('pf-ai-btn').addEventListener('click', runAIReview);
 $('pf-dna-btn').addEventListener('click', () => {
     loadPortfolio().then(() => loadDNA(true));
 });
 $('pf-persona-btn').addEventListener('click', runPersonaBuild);
+
+/* ---------- 🎯 Моя стратегия (из ваших сделок, 0 токенов) ---------- */
+function renderMyStrategy(ms) {
+    const box = $('mystrat-body');
+    if (!box) return;
+    if (!ms || ms.empty) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+    box.classList.remove('hidden');
+    const symChips = (ms.symbols || []).map(s => `<span class="ms-chip">${s}</span>`).join('');
+    const rules = (ms.rules || []).map(r => `<li>${esc(r)}</li>`).join('');
+    const avoid = (ms.avoid && ms.avoid.length)
+        ? `<div class="ms-avoid"><b>Избегать:</b> ${ms.avoid.map(esc).join(' · ')}</div>` : '';
+    box.innerHTML = `
+        <div class="ms-head">🎯 ${esc(ms.name)} <span class="badge">подключена к сканеру</span>
+            <span style="color:var(--muted);font-size:11px;font-weight:400">· выведена из ${ms.base_trades} сделок за ${ms.days} дн.</span></div>
+        <div style="margin-top:6px">${symChips}</div>
+        <ul>${rules}</ul>
+        ${avoid}`;
+}
+
+async function loadMyStrategy() {
+    try {
+        const ms = await API.get('/api/portfolio/my-strategy');
+        renderMyStrategy(ms);
+    } catch (e) { /* молча: блок просто останется скрытым */ }
+}
+
+$('pf-mystrat-btn').addEventListener('click', async () => {
+    const b = $('pf-mystrat-btn');
+    b.disabled = true; b.textContent = '⏳ вывожу…';
+    try {
+        const ms = await API.post(`/api/portfolio/my-strategy?days=${pfDays}`, {});
+        renderMyStrategy(ms);
+        toast('🎯 Стратегия выведена из ваших сделок и подключена к сканеру');
+    } catch (e) {
+        toast('❌ ' + e.message);
+    } finally {
+        b.disabled = false; b.textContent = '🎯 Моя стратегия';
+    }
+});
+
 $('diag-bybit-btn').addEventListener('click', runBybitDiag);
 $('flt-strong').addEventListener('change', renderFeed);
 $('test-models-btn').addEventListener('click', testModels);
