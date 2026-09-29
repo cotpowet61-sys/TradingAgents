@@ -156,6 +156,14 @@ class LiveEngine:
             px = (self.prices.get(sig.get("symbol") or "") or {}).get("last")
             reason, exit_px = None, None
             tp, sl, side = sig.get("tp"), sig.get("sl"), sig.get("side")
+            # breakeven + трейлинг: подтягиваем стоп вслед за ценой (signal_gates)
+            if px:
+                try:
+                    import signal_gates as G
+                    if G.update_stops(settings, sig, px):
+                        sl = sig.get("sl")
+                except Exception:
+                    pass
             if px and tp and sl:
                 if side == "LONG":
                     if px >= tp:
@@ -297,18 +305,15 @@ class LiveEngine:
                     if sig.confidence < min_conf:
                         return
                     summ = ta.compute_feature_summary(candles) or {}
-                    # квант-фильтры качества сигналов (стоп-лист + сезонный объём),
-                    # калибруются по backtest_local.py; дефолты не режут выдачу
+                    # единые квант-фильтры входа (зеркало бэктестов) — signal_gates
                     try:
-                        bl = {x.strip() for x in (settings.STYPE_BLOCKLIST or "").split(",") if x.strip()}
-                        if stype in bl or f"{stype}:{sym}" in bl:
+                        import signal_gates as G
+                        if G.entry_block_reason(
+                                settings, stype=stype, side=sig.side.value, symbol=sym,
+                                hour_utc=time.gmtime((candles[-1].ts or 0) / 1000).tm_hour,
+                                vol_season=(summ or {}).get("vol_ratio_seasonal"),
+                                atr_pct=(summ or {}).get("atr_pct")):
                             return
-                        if settings.VOL_SEASON_GATE:
-                            vrs = (summ or {}).get("vol_ratio_seasonal")
-                            vst = {x.strip() for x in (settings.VOL_SEASON_STYPES or "").split(",") if x.strip()}
-                            if vrs is not None and vrs < float(settings.VOL_SEASON_MIN) \
-                                    and (not vst or stype in vst):
-                                return
                     except Exception:
                         pass
                     # персонализация под вашу историю (ДНК; 0 токенов)
@@ -388,6 +393,9 @@ class LiveEngine:
                         await self.broadcast(pending_close)
                     event["status"] = "ACTIVE"
                     event["stype"] = stype
+                    event["entry"] = sig.entry
+                    event["hi"] = sig.entry
+                    event["lo"] = sig.entry
                     if learned:
                         event["learned"] = learned
                     self.active[(sym, tf)] = dict(event)

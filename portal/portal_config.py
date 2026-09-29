@@ -105,6 +105,21 @@ class PortalSettings(BaseSettings):
     VOL_SEASON_STYPES: str = ""      # пусто = все стратегии; иначе "momentum_breakout,rsi_swing"
     # Стоп-лист стратегий (из отчёта бэктеста): \"stype\" или \"stype:SYMBOL\" через запятую.
     STYPE_BLOCKLIST: str = ""
+    # ^ формат: "stype", "stype:SYMBOL" или "stype/SIDE" (напр. supertrend/SHORT)
+    # Запретные ДИАПАЗОНЫ сезонного объёма: "1.0-2.0,3.0-999". Пусто = не режем.
+    # По week1: зоны 1.0-2.0 и >=3.0 — худшие (30-35% win, минусовой avg).
+    VOL_SEASON_BLOCK: str = ""
+    # Запретные диапазоны ATR% входа: "0.6-1.0". Пусто = не режем.
+    ATR_PCT_BLOCK: str = ""
+    # Запретные часы входа (UTC) через запятую: "3,11,19". Пусто = не режем.
+    HOURS_BLOCK: str = ""
+    # Breakeven: при движении в прибыль на BE_TRIGGER_PCT% стоп → вход + BE_OFFSET_PCT%.
+    # 0 = выкл. Ключевой механизм высокого winrate (проигрыш → нулевой выход).
+    BE_TRIGGER_PCT: float = 0.0
+    BE_OFFSET_PCT: float = 0.15
+    # Трейлинг: после TRAIL_START_PCT% прибыли стоп следует за ценой на TRAIL_PCT%.
+    TRAIL_START_PCT: float = 0.0
+    TRAIL_PCT: float = 0.6
 
     # ------------------------------------------------------------------ #
     # SaaS (мульти-пользовательский режим продажи подписки)
@@ -229,6 +244,15 @@ class PortalSettings(BaseSettings):
                     "vol_season_min": self.VOL_SEASON_MIN,
                     "vol_season_stypes": self.VOL_SEASON_STYPES,
                     "stype_blocklist": self.STYPE_BLOCKLIST,
+                    "vol_season_block": self.VOL_SEASON_BLOCK,
+                    "atr_pct_block": self.ATR_PCT_BLOCK,
+                    "hours_block": self.HOURS_BLOCK,
+                },
+                "exit_engine": {
+                    "be_trigger_pct": self.BE_TRIGGER_PCT,
+                    "be_offset_pct": self.BE_OFFSET_PCT,
+                    "trail_start_pct": self.TRAIL_START_PCT,
+                    "trail_pct": self.TRAIL_PCT,
                 },
             },
             "rules": {
@@ -270,6 +294,13 @@ class PortalSettings(BaseSettings):
         "vol_season_min": ("VOL_SEASON_MIN", "VOL_SEASON_MIN"),
         "vol_season_stypes": ("VOL_SEASON_STYPES", "VOL_SEASON_STYPES"),
         "stype_blocklist": ("STYPE_BLOCKLIST", "STYPE_BLOCKLIST"),
+        "vol_season_block": ("VOL_SEASON_BLOCK", "VOL_SEASON_BLOCK"),
+        "atr_pct_block": ("ATR_PCT_BLOCK", "ATR_PCT_BLOCK"),
+        "hours_block": ("HOURS_BLOCK", "HOURS_BLOCK"),
+        "be_trigger_pct": ("BE_TRIGGER_PCT", "BE_TRIGGER_PCT"),
+        "be_offset_pct": ("BE_OFFSET_PCT", "BE_OFFSET_PCT"),
+        "trail_start_pct": ("TRAIL_START_PCT", "TRAIL_START_PCT"),
+        "trail_pct": ("TRAIL_PCT", "TRAIL_PCT"),
         "leverage": ("LEVERAGE", "LEVERAGE"),
         "brand_name": ("BRAND_NAME", "BRAND_NAME"),
         "owner_emails": ("OWNER_EMAILS", "OWNER_EMAILS"),

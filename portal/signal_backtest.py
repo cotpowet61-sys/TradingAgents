@@ -120,6 +120,13 @@ def _simulate(symbol: str, tf: str, candles: List) -> dict:
                     hit, exit_px, reason = True, open_t["sl"], "SL"
                 elif c.low <= open_t["tp"]:
                     hit, exit_px, reason = True, open_t["tp"], "TP"
+            if not hit:
+                # breakeven/трейлинг по экстремуму бара — зеркало live-тикера (signal_gates)
+                try:
+                    import signal_gates as G
+                    G.update_stops(settings, open_t, c.high if side == "LONG" else c.low)
+                except Exception:
+                    pass
             if not hit and i - open_t["i"] >= hold_bars:
                 hit, exit_px, reason = True, c.close, "timeout"
             if hit:
@@ -160,17 +167,15 @@ def _simulate(symbol: str, tf: str, candles: List) -> dict:
             summ = ta.compute_feature_summary(window) or {}
         except Exception:
             summ = {}
-        # зеркало квант-фильтров live_engine (стоп-лист + сезонный объём)
+        # зеркало квант-фильтров live_engine — единый модуль signal_gates
         try:
-            bl = {x.strip() for x in (settings.STYPE_BLOCKLIST or "").split(",") if x.strip()}
-            if last_type in bl or f"{last_type}:{symbol}" in bl:
+            import signal_gates as G
+            if G.entry_block_reason(
+                    settings, stype=last_type, side=sig.side.value, symbol=symbol,
+                    hour_utc=(c.ts // 3_600_000) % 24,
+                    vol_season=summ.get("vol_ratio_seasonal"),
+                    atr_pct=summ.get("atr_pct")):
                 continue
-            if settings.VOL_SEASON_GATE:
-                vrs = (summ or {}).get("vol_ratio_seasonal")
-                vst = {x.strip() for x in (settings.VOL_SEASON_STYPES or "").split(",") if x.strip()}
-                if vrs is not None and vrs < float(settings.VOL_SEASON_MIN) \
-                        and (not vst or last_type in vst):
-                    continue
         except Exception:
             pass
         tg = _targets(entry, sig.side.value, summ, sig.tp, sig.sl)
@@ -178,6 +183,7 @@ def _simulate(symbol: str, tf: str, candles: List) -> dict:
                   "strategy": getattr(strat, "name", last_type), "stype": last_type,
                   "i": i, "ts": c.ts, "entry": entry, "tp": tg["tp"], "sl": tg["sl"],
                   "mode": tg["mode"], "conf": round(sig.confidence, 3),
+                  "hi": entry, "lo": entry,
                   "rsi": summ.get("rsi"), "atr_pct": summ.get("atr_pct"),
                   "vol_ratio": summ.get("volume_ratio"),
                   "vol_ratio_seasonal": summ.get("vol_ratio_seasonal"),

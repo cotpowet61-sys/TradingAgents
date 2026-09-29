@@ -2,27 +2,35 @@
 """
 Локальный бэктест-харнесс TradeVision: «как если бы страница сканера была открыта».
 
-Запуск на машине с доступом к Bybit (через venv портала):
-    cd portal
-    python backtest_local.py --syms BTCUSDT,ETHUSDT,SOLUSDT --days 7 --tfs 5m,1m
+Режим А — полный прогон (нужен доступ к Bybit):
+    python backtest_local.py --days 10 --tfs "5m" --tag week1
 
-Что делает:
-  1. Тянет РЕАЛЬНЫЕ свечи Bybit (synthetic-фолбэк = прогон не считается, как и в лайве).
-  2. Прогоняет зеркальную лайв-логику (авто-селектор, min_conf, приоритет целей
-     manual→ATR→strategy→default, кулдаун 30 мин, разворот только при +0.10 conf,
-     одна сделка на (монета,TF)).
-  3. Считает разрезы (стратегия/сторона/монета/час/ratio-бакеты) — где теряем.
-  4. Перебирает «ручки» качества (conf floor, сезонный объём, ATR-множители,
-     стоп-лист стратегий) и печатает таблицу вариантов с winrate/PF.
-  5. Пишет JSON-отчёт для отправки разработчику и печатает рекомендуемые
-     строки .env (никакой магии: только то, что замерено на ваших данных).
+Режим Б — оффлайн-анализ уже готового отчёта (без сети, секунды):
+    python backtest_local.py --analyze data/backtest_report_week1.json
 
-Честность: winrate ≥70 — цель, а не обещание. Если её даёт только узкий сегмент
-(напр. conf≥0.70), отчёт покажет и общий winrate, и winrate сегмента.
+Что делает режим А:
+  1. Тянет РЕАЛЬНЫЕ свечи Bybit (synthetic = прогон не считается).
+  2. Зеркальная лайв-логика: авто-селектор, min_conf, приоритет целей, кулдаун
+     30 мин, разворот при +0.10 conf, одна сделка на (монета,TF), единый модуль
+     фильтров signal_gates (стоп-листы, запретные зоны, breakeven/трейлинг).
+  3. Разрезы (стратегия/сторона/монета/час/ratio-бакеты).
+  4. Перебор «ручек» качества → таблица n/win/avg/PF по вариантам.
+  5. JSON-отчёт + рекомендуемые строки .env.
+
+Режим Б (--analyze): берёт trades_baseline из отчёта и ОФФЛАЙН ищет лучшую
+КОМБИНАЦИЮ входных фильтров (стоп-листы, запретные зоны объёма/ATR/часов,
+сторонние стоп-листы stype/SIDE) с нижними границами Уилсона — это и есть
+кандидат в .env. Трейлинг/breakeven оффлайн не оценить (нужен путь цены) —
+их меряем полным прогоном (варианты be_*/trail_*).
+
+Честность: winrate ≥70 — цель, а не обещание. Конфиг-фильтры с 38% до 70%
+не дотянут (см. отчёт); реальный механизм высокого winrate — breakeven/трейлинг
+и/или снижение TP, измеряем цифрами, не верой.
 """
 import argparse
 import asyncio
 import json
+import math
 import os
 import sys
 import time
@@ -34,6 +42,7 @@ sys.path.insert(0, os.path.join(ROOT, "backend"))
 
 from portal_config import settings            # noqa: E402
 import signal_backtest as sb                   # noqa: E402
+import signal_gates as G                       # noqa: E402
 from strategies.registry import build_strategy  # noqa: E402
 from strategies.selector import get_selector    # noqa: E402
 from strategies import indicators as ta         # noqa: E402
@@ -44,13 +53,15 @@ FLIP_MARGIN = 0.10     # зеркало FLIP_CONF_MARGIN
 DEFAULT_SYMS = ("BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,"
                 "LINKUSDT,AVAXUSDT,NEARUSDT,ARBUSDT,OPUSDT,ATOMUSDT")
 
-# Какие глобальные ручки варианты трогают — снапшотим и откатываем.
+# Глобальные ручки, которые трогают варианты (снапшотим и откатываем).
 KNOBS = ("MIN_CONFIDENCE", "RR_BINDING", "ATR_TP_MULT", "ATR_SL_MULT",
-         "VOL_SEASON_GATE", "VOL_SEASON_MIN", "VOL_SEASON_STYPES", "STYPE_BLOCKLIST")
+         "VOL_SEASON_GATE", "VOL_SEASON_MIN", "VOL_SEASON_STYPES", "STYPE_BLOCKLIST",
+         "VOL_SEASON_BLOCK", "ATR_PCT_BLOCK", "HOURS_BLOCK",
+         "BE_TRIGGER_PCT", "BE_OFFSET_PCT", "TRAIL_START_PCT", "TRAIL_PCT")
 
 
 # --------------------------------------------------------------------------- #
-# Зеркальный симулятор (как live_engine.scan_once + _gate)
+# Зеркальный симулятор
 # --------------------------------------------------------------------------- #
 def simulate(symbol: str, tf: str, candles) -> list:
     sel = get_selector()
@@ -61,8 +72,6 @@ def simulate(symbol: str, tf: str, candles) -> list:
     last_type, last_pick = None, -10 ** 9
     open_t = None
     last_side, last_conf, last_sig_ts = None, 0.0, 0
-    vol_stypes = {x.strip() for x in (settings.VOL_SEASON_STYPES or "").split(",") if x.strip()}
-    blocklist = {x.strip() for x in (settings.STYPE_BLOCKLIST or "").split(",") if x.strip()}
 
     n = len(candles)
     for i in range(max(sb.WARMUP, 60), n - 1):
@@ -80,6 +89,9 @@ def simulate(symbol: str, tf: str, candles) -> list:
                     hit, exit_px, reason = True, open_t["sl"], "SL"
                 elif c.low <= open_t["tp"]:
                     hit, exit_px, reason = True, open_t["tp"], "TP"
+            if not hit:
+                # breakeven/трейлинг по экстремуму бара (зеркало live-тикера)
+                G.update_stops(settings, open_t, c.high if side == "LONG" else c.low)
             if not hit and i - open_t["i"] >= hold_bars:
                 hit, exit_px, reason = True, c.close, "timeout"
             if hit:
@@ -114,23 +126,18 @@ def simulate(symbol: str, tf: str, candles) -> list:
         if sig.confidence < min_conf:
             continue
         side_v = sig.side.value
-        # стоп-лист стратегий (зеркало лайва)
-        if last_type in blocklist or f"{last_type}:{symbol}" in blocklist:
-            continue
         entry = sig.entry or c.close
         try:
             summ = ta.compute_feature_summary(window) or {}
         except Exception:
             summ = {}
-        # сезонный объёмный фильтр (зеркало лайва)
-        if settings.VOL_SEASON_GATE:
-            vrs = summ.get("vol_ratio_seasonal")
-            if vrs is not None and vrs < float(settings.VOL_SEASON_MIN) \
-                    and (not vol_stypes or last_type in vol_stypes):
-                continue
-        # live-антиспам: 30 мин та же сторона; разворот — только при +0.10 conf.
-        # (харнесс применяет эти правила и ПОСЛЕ закрытия сделки, т.е. чуть
-        #  строже, чем лайв — занижает количество сделок, а не завышает winrate)
+        # единые фильтры входа (зеркало лайва)
+        if G.entry_block_reason(settings, stype=last_type, side=side_v, symbol=symbol,
+                                hour_utc=(c.ts // 3_600_000) % 24,
+                                vol_season=summ.get("vol_ratio_seasonal"),
+                                atr_pct=summ.get("atr_pct")):
+            continue
+        # live-антиспам (чуть строже лайва: действует и после закрытия сделки)
         if last_side == side_v and (c.ts - last_sig_ts) / 1000 < COOLDOWN_S:
             continue
         if last_side and last_side != side_v and sig.confidence < last_conf + FLIP_MARGIN:
@@ -141,6 +148,7 @@ def simulate(symbol: str, tf: str, candles) -> list:
                   "strategy": getattr(strat, "name", last_type), "stype": last_type,
                   "i": i, "ts": c.ts, "entry": entry, "tp": tg["tp"], "sl": tg["sl"],
                   "mode": tg["mode"], "conf": round(sig.confidence, 3),
+                  "hi": entry, "lo": entry,
                   "rsi": summ.get("rsi"), "atr_pct": summ.get("atr_pct"),
                   "vol_ratio": summ.get("volume_ratio"),
                   "vol_ratio_seasonal": summ.get("vol_ratio_seasonal"),
@@ -149,18 +157,27 @@ def simulate(symbol: str, tf: str, candles) -> list:
 
 
 # --------------------------------------------------------------------------- #
-# Метрики / разрезы
+# Метрики
 # --------------------------------------------------------------------------- #
 def stat(rows: list) -> dict:
     if not rows:
-        return {"n": 0, "winrate": None, "avg": None, "pf": None}
+        return {"n": 0, "winrate": None, "avg": None, "pf": None, "wlo": None}
     wins = [r for r in rows if r["pnl_pct"] > 0]
     gw = sum(r["pnl_pct"] for r in wins)
     gl = -sum(r["pnl_pct"] for r in rows if r["pnl_pct"] <= 0)
-    return {"n": len(rows),
-            "winrate": round(100 * len(wins) / len(rows), 1),
+    wr = 100 * len(wins) / len(rows)
+    return {"n": len(rows), "winrate": round(wr, 1),
             "avg": round(sum(r["pnl_pct"] for r in rows) / len(rows), 3),
-            "pf": round(gw / gl, 2) if gl > 0 else (99.0 if gw > 0 else None)}
+            "pf": round(gw / gl, 2) if gl > 0 else (99.0 if gw > 0 else None),
+            "wlo": _wilson_lo(wr, len(rows))}
+
+
+def _wilson_lo(wr: float, n: int, z: float = 1.96) -> float:
+    if not n:
+        return 0.0
+    p = wr / 100
+    den = 1 + z * z / n
+    return round(100 * (p + z * z / (2 * n) - z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))) / den, 1)
 
 
 def cuts(rows: list):
@@ -168,8 +185,8 @@ def cuts(rows: list):
         agg = {}
         for r in rows:
             agg.setdefault(fn(r), []).append(r)
-        table = [(k, stat(v)) for k, v in agg.items()]
-        table.sort(key=lambda kv: (-(kv[1]["n"] or 0)))
+        table = sorted(((k, stat(v)) for k, v in agg.items()),
+                       key=lambda kv: (-(kv[1]["n"] or 0)))
         return title, table
 
     def conf_bucket(r):
@@ -192,7 +209,11 @@ def cuts(rows: list):
                 return f"<{edge}"
         return ">=2.5"
 
+    def stype_side(r):
+        return f"{r['stype']}/{r['side'][0]}"
+
     return [by(lambda r: r["stype"], "by_strategy"),
+            by(stype_side, "by_strategy_side"),
             by(lambda r: r["side"], "by_side"),
             by(lambda r: r["symbol"], "by_symbol"),
             by(lambda r: r["tf"], "by_tf"),
@@ -215,26 +236,45 @@ def worst_strategies(rows: list, min_n: int = 6, max_wr: float = 40.0) -> list:
 
 
 # --------------------------------------------------------------------------- #
-# Варианты-«ручки»
+# Варианты
 # --------------------------------------------------------------------------- #
-def build_variants(baseline_trades: list) -> list:
+def build_variants(baseline_trades: list, quick: bool = False) -> list:
     base_block = worst_strategies(baseline_trades)
-    variants = [
+    full = [
         ("baseline", {}),
         ("conf_0.60", {"MIN_CONFIDENCE": 0.60}),
-        ("conf_0.65", {"MIN_CONFIDENCE": 0.65}),
-        ("conf_0.70", {"MIN_CONFIDENCE": 0.70}),
-        ("vol_season_1.0", {"VOL_SEASON_GATE": True, "VOL_SEASON_MIN": 1.0}),
         ("vol_season_1.3", {"VOL_SEASON_GATE": True, "VOL_SEASON_MIN": 1.3}),
-        ("vol_season_1.6", {"VOL_SEASON_GATE": True, "VOL_SEASON_MIN": 1.6}),
-        ("atr_2.4_1.0", {"RR_BINDING": False, "ATR_TP_MULT": 2.4, "ATR_SL_MULT": 1.0}),
-        ("atr_2.0_1.2", {"RR_BINDING": False, "ATR_TP_MULT": 2.0, "ATR_SL_MULT": 1.2}),
         ("atr_1.6_1.2", {"RR_BINDING": False, "ATR_TP_MULT": 1.6, "ATR_SL_MULT": 1.2}),
+        # — фильтры зон, замеренные на week1 —
+        ("vol_block_1.0-2.0+3up", {"VOL_SEASON_BLOCK": "1.0-2.0,3.0-999"}),
+        ("atr_block_0.6-1.0", {"ATR_PCT_BLOCK": "0.6-1.0"}),
+        ("hours_block_3_11_19", {"HOURS_BLOCK": "3,11,19"}),
+        # — механика выхода: высокий winrate честно —
+        ("be_0.8_0.10", {"BE_TRIGGER_PCT": 0.8, "BE_OFFSET_PCT": 0.10}),
+        ("be_1.0_0.15", {"BE_TRIGGER_PCT": 1.0, "BE_OFFSET_PCT": 0.15}),
+        ("trail_1.3_0.6", {"TRAIL_START_PCT": 1.3, "TRAIL_PCT": 0.6}),
+        ("be1.0+trail1.4_0.6", {"BE_TRIGGER_PCT": 1.0, "BE_OFFSET_PCT": 0.15,
+                                "TRAIL_START_PCT": 1.4, "TRAIL_PCT": 0.6}),
     ]
     if base_block:
-        variants.append(("block_" + "+".join(base_block), {"STYPE_BLOCKLIST": ",".join(base_block)}))
-    # комбо: лучшие одиночные рычаги собираем после прогона (в main)
-    return variants
+        full.insert(1, ("block_" + "+".join(base_block), {"STYPE_BLOCKLIST": ",".join(base_block)}))
+        full.append(("combo", {"STYPE_BLOCKLIST": ",".join(base_block),
+                               "VOL_SEASON_BLOCK": "1.0-2.0,3.0-999",
+                               "ATR_PCT_BLOCK": "0.6-1.0",
+                               "HOURS_BLOCK": "3,11,19",
+                               "RR_BINDING": False, "ATR_TP_MULT": 1.6, "ATR_SL_MULT": 1.2}))
+        full.append(("combo+be", {"STYPE_BLOCKLIST": ",".join(base_block),
+                                  "VOL_SEASON_BLOCK": "1.0-2.0,3.0-999",
+                                  "ATR_PCT_BLOCK": "0.6-1.0",
+                                  "HOURS_BLOCK": "3,11,19",
+                                  "RR_BINDING": False, "ATR_TP_MULT": 1.6, "ATR_SL_MULT": 1.2,
+                                  "BE_TRIGGER_PCT": 1.0, "BE_OFFSET_PCT": 0.15,
+                                  "TRAIL_START_PCT": 1.4, "TRAIL_PCT": 0.6}))
+    if quick:
+        keep = ("baseline",) + tuple(v[0] for v in full if v[0].startswith("block_")) + \
+            ("be_1.0_0.15", "be1.0+trail1.4_0.6", "vol_block_1.0-2.0+3up", "combo", "combo+be")
+        full = [v for v in full if v[0] in keep]
+    return full
 
 
 def run_variant(name, patch, cache, saved):
@@ -251,7 +291,7 @@ def run_variant(name, patch, cache, saved):
             setattr(settings, k, saved[k])
     trades.sort(key=lambda r: r["ts"])
     s = stat(trades)
-    print(f"    {name:<28s} n={s['n']:>4}  win={s['winrate']}%  avg={s['avg']}%  PF={s['pf']}")
+    print(f"    {name:<30s} n={s['n']:>4}  win={s['winrate']}%  avg={s['avg']}%  PF={s['pf']}  wlo={s['wlo']}%")
     return {"name": name, "patch": patch, "stats": s,
             "by_reason": _exits(trades), "trades": trades}
 
@@ -264,10 +304,113 @@ def _exits(rows):
 
 
 # --------------------------------------------------------------------------- #
-# Main
+# Режим Б: оффлайн-анализ отчёта
+# --------------------------------------------------------------------------- #
+def analyze_report(path: str):
+    d = json.load(open(path, encoding="utf-8"))
+    tr = d.get("trades_baseline") or []
+    if not tr:
+        raise SystemExit("в отчёте нет trades_baseline")
+    print(f"== analyze: {os.path.basename(path)} — {len(tr)} сделок baseline")
+    print(f"   baseline: {stat(tr)}")
+
+    VOL_Z = [(0, 0.7), (0.7, 1.0), (1.0, 1.3), (1.3, 1.6), (1.6, 2.0), (2.0, 3.0), (3.0, 999.0)]
+    ATR_Z = [(0, 0.3), (0.3, 0.6), (0.6, 1.0), (1.0, 1.5), (1.5, 99)]
+
+    def zstat(keyfn, zones):
+        out = []
+        for lo, hi in zones:
+            rows = [t for t in tr if (lambda v: v is not None and lo <= v < hi)(keyfn(t))]
+            out.append((lo, hi, stat(rows)))
+        return out
+
+    print("\n-- зоны сезонного объёма --")
+    vol_block = []
+    for lo, hi, s in zstat(lambda t: t.get("vol_ratio_seasonal"), VOL_Z):
+        mark = ""
+        if s["n"] >= 20 and (s["winrate"] or 100) < 36 and (s["avg"] or 0) < 0:
+            vol_block.append(f"{lo}-{hi:g}"); mark = "  <== БЛОК"
+        print(f"   [{lo:g},{hi:g}) n={s['n']:>3} win={s['winrate']}% avg={s['avg']}%{mark}")
+
+    print("\n-- зоны ATR% --")
+    atr_block = []
+    for lo, hi, s in zstat(lambda t: t.get("atr_pct"), ATR_Z):
+        mark = ""
+        if s["n"] >= 20 and (s["winrate"] or 100) < 32 and (s["avg"] or 0) < 0:
+            atr_block.append(f"{lo}-{hi:g}"); mark = "  <== БЛОК"
+        print(f"   [{lo:g},{hi:g}) n={s['n']:>3} win={s['winrate']}% avg={s['avg']}%{mark}")
+
+    print("\n-- часы UTC (худшие с n>=20) --")
+    hours = sorted(((h, stat([t for t in tr if str(t.get("hour")) == h]))
+                    for h in {str(t.get("hour")) for t in tr}), key=lambda kv: kv[1]["winrate"] or 0)
+    hours_block = []
+    for h, s in hours[:5]:
+        mark = ""
+        if s["n"] >= 20 and (s["winrate"] or 100) < 30 and (s["avg"] or 0) < 0:
+            hours_block.append(h); mark = "  <== БЛОК"
+        print(f"   {h}:00 n={s['n']:>3} win={s['winrate']}% avg={s['avg']}%{mark}")
+
+    stypes = worst_strategies(tr)
+    # сторонние блоки stype/SIDE (n>=15, win<=33, pf<0.9)
+    agg = {}
+    for t in tr:
+        agg.setdefault((t["stype"], t["side"]), []).append(t)
+    side_blocks = sorted(f"{k[0]}/{k[1]}" for k, v in agg.items()
+                         if len(v) >= 15 and (stat(v)["winrate"] or 100) <= 33
+                         and (stat(v)["pf"] or 9) < 0.9)
+    if side_blocks:
+        print("\n-- сторонние стоп-листы stype/SIDE --")
+        for b in side_blocks:
+            k = tuple(b.split("/"))
+            print(f"   {b}: {stat(agg[k])}")
+
+    # ---- комбинированная оценка оффлайн (только входные фильтры) ----
+    def f_type(t): return t["stype"] in stypes or f"{t['stype']}/{t['side']}" in side_blocks
+    def f_vol(t):
+        v = t.get("vol_ratio_seasonal")
+        return v is not None and any(lo <= v < hi for lo, hi in
+                                     (map(lambda x: tuple(map(float, x.split('-'))), vol_block)))
+    def f_atr(t):
+        a = t.get("atr_pct")
+        return a is not None and any(lo <= a < hi for lo, hi in
+                                     (map(lambda x: tuple(map(float, x.split('-'))), atr_block)))
+    def f_hour(t): return str(t.get("hour")) in set(hours_block)
+
+    print("\n-- комбинации (оффлайн, входные фильтры) --")
+    combos = {
+        "stype_block": f_type,
+        "vol_zones": f_vol,
+        "atr_zones": f_atr,
+        "hours": f_hour,
+    }
+    for name, f in combos.items():
+        kept = [t for t in tr if not f(t)]
+        print(f"   {name:22s} -> {stat(kept)}")
+    kept = [t for t in tr if not (f_type(t) or f_vol(t) or f_atr(t) or f_hour(t))]
+    s = stat(kept)
+    print(f"   {'ВСЁ ВМЕСТЕ':22s} -> {s}")
+
+    print("\n-- рекомендуемые строки .env (входные фильтры) --")
+    if stypes:
+        print(f"   STYPE_BLOCKLIST={','.join(stypes + side_blocks)}")
+    if vol_block:
+        print(f"   VOL_SEASON_BLOCK={','.join(vol_block)}")
+    if atr_block:
+        print(f"   ATR_PCT_BLOCK={','.join(atr_block)}")
+    if hours_block:
+        print(f"   HOURS_BLOCK={','.join(hours_block)}")
+    print("   RR_BINDING=False\n   ATR_TP_MULT=1.6\n   ATR_SL_MULT=1.2")
+    print("\nВНИМАНИЕ: breakeven/трейлинг оффлайн не оценить — меряются полным прогоном")
+    print("(варианты be_*/be1.0+trail*). Если combo+be даст winrate ~60-70% при PF>=1.2,")
+    print("включайте BE_TRIGGER_PCT/TRAIL_* в .env — это и есть честный путь к 70.")
+    print("Предел конфиг-фильтров на ваших данных виден выше — не ждите от них 70.")
+
+
+# --------------------------------------------------------------------------- #
+# Режим А: загрузка + прогон
 # --------------------------------------------------------------------------- #
 async def fetch_all(syms, tfs, days) -> dict:
-    cache, errors = {}, []
+    cache = {}
     for sym in syms:
         for tf in tfs:
             days_eff = min(days, sb._MAX_DAYS.get(tf, 20))
@@ -276,7 +419,6 @@ async def fetch_all(syms, tfs, days) -> dict:
                 cache[(sym, tf)] = candles
                 print(f"  [ok] {sym} {tf}: {len(candles)} баров ({days_eff} дн.)")
             except Exception as exc:
-                errors.append(f"{sym} {tf}: {exc}")
                 print(f"  [ERR] {sym} {tf}: {exc}")
     if not cache:
         raise SystemExit("Нет реальных данных Bybit — прогон не считаем. Включите сеть/VPN.")
@@ -291,7 +433,6 @@ async def amain(args):
 
     print("-- загрузка истории Bybit --")
     cache = await fetch_all(syms, tfs, args.days)
-
     saved = {k: getattr(settings, k) for k in KNOBS}
 
     print("-- baseline --")
@@ -300,17 +441,9 @@ async def amain(args):
 
     print("-- варианты --")
     results = [base]
-    for name, patch in build_variants(base_trades)[1:]:
+    variants = build_variants(base_trades, quick=args.quick)
+    for name, patch in variants[1:]:
         results.append(run_variant(name, patch, cache, saved))
-
-    # комбо из двух лучших небазовых рычагов по среднему pnl (если они про разное)
-    rest = [r for r in results[1:] if r["stats"]["n"] >= 8]
-    rest.sort(key=lambda r: (r["stats"]["winrate"] or 0, r["stats"]["avg"] or 0), reverse=True)
-    if len(rest) >= 2:
-        combo_patch = dict(rest[0]["patch"])
-        combo_patch.update(rest[1]["patch"])
-        results.append(run_variant(f"combo[{rest[0]['name']}+{rest[1]['name']}]",
-                                   combo_patch, cache, saved))
 
     print("\n-- разрезы baseline (где теряем) --")
     cuts_out = {}
@@ -321,43 +454,37 @@ async def amain(args):
             if (v["n"] or 0) >= 3:
                 print(f"    {str(k):<22s} n={v['n']:>4} win={v['winrate']}% avg={v['avg']}%")
 
-    # рекомендации: лучший вариант с достаточной выборкой
     cands = [r for r in results if r["stats"]["n"] >= 15]
-    best = None
-    if cands:
-        best = max(cands, key=lambda r: (r["stats"]["winrate"] or 0))
+    best = max(cands, key=lambda r: (r["stats"]["wlo"] or 0)) if cands else None
     print("\n-- итог --")
     print(f"  baseline winrate: {base['stats']['winrate']}% (n={base['stats']['n']})")
     rec_env = {}
     if best:
-        print(f"  лучший вариант: {best['name']} → win {best['stats']['winrate']}% "
-              f"(n={best['stats']['n']}, PF={best['stats']['pf']})")
+        print(f"  лучший вариант (по нижней границе Уилсона): {best['name']} → "
+              f"win {best['stats']['winrate']}% (n={best['stats']['n']}, PF={best['stats']['pf']})")
         if best["patch"]:
             print("  рекомендуемые строки .env:")
             for k, v in best["patch"].items():
                 print(f"    {k}={v}")
                 rec_env[k] = v
-    else:
-        print("  мало сделок (<15) для уверенных выводов — увеличьте --days/--syms.")
 
     os.makedirs(os.path.join(HERE, "data"), exist_ok=True)
     out_path = args.out or os.path.join(HERE, "data", f"backtest_report_{args.tag}.json")
-    report = {
-        "tag": args.tag, "created": int(time.time()), "days": args.days,
-        "symbols": syms, "tfs": tfs,
-        "settings_snapshot": saved,
-        "recommended_env": rec_env,
-        "variants": [{k: r[k] for k in ("name", "patch", "stats", "by_reason")} for r in results],
-        "cuts_baseline": cuts_out,
-        "trades_baseline": base_trades,
-        "trades_best": (best["trades"] if best else []),
-        "note": "winrate≥70 — цель. Если её даёт только сегмент (conf≥0.70 / vol≥1.3), "
-                "см. по строкам таблицы вариантов и разрезов; глобальная цифра — baseline.",
-    }
     with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(report, f, ensure_ascii=False, indent=1)
+        json.dump({
+            "tag": args.tag, "created": int(time.time()), "days": args.days,
+            "symbols": syms, "tfs": tfs, "settings_snapshot": saved,
+            "recommended_env": rec_env,
+            "variants": [{k: r[k] for k in ("name", "patch", "stats", "by_reason")} for r in results],
+            "cuts_baseline": cuts_out,
+            "trades_baseline": base_trades,
+            "trades_best": (best["trades"] if best else []),
+            "note": "winrate≥70 — цель. Входные фильтры с 38% до 70 не дотягивают; "
+                    "смотрите варианты be_*/be1.0+trail*: breakeven/трейлинг — "
+                    "честный механизм высокого winrate.",
+        }, f, ensure_ascii=False, indent=1)
     print(f"\nDONE за {time.time() - t0:.0f} c → {out_path}")
-    print("Пришлите этот JSON разработчику для следующего витка улучшений.")
+    print("Дальше: python backtest_local.py --analyze <этот файл> — оффлайн-подбор комбинации.")
 
 
 def main():
@@ -367,7 +494,12 @@ def main():
     ap.add_argument("--days", type=int, default=int(os.environ.get("SIM_DAYS", "7")))
     ap.add_argument("--tag", default=os.environ.get("SIM_TAG", "run"))
     ap.add_argument("--out", default="")
+    ap.add_argument("--analyze", default="", help="оффлайн-анализ готового отчёта JSON")
+    ap.add_argument("--quick", action="store_true", help="только ключевые варианты (быстрее)")
     args = ap.parse_args()
+    if args.analyze:
+        analyze_report(args.analyze)
+        return
     asyncio.run(amain(args))
 
 
