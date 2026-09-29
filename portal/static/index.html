@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TradeVision Portal — AI-анализ Bybit</title>
+    <link rel="stylesheet" href="/static/css/portal.css">
+</head>
+<body>
+<div class="bg-aurora"></div>
+<div class="bg-grid"></div>
+<canvas id="neuro-bg"></canvas>
+
+<div id="app">
+    <header>
+        <div class="logo">
+            <div class="logo-orb">◈</div>
+            <div>
+                <h1>TradeVision</h1>
+                <small>AI · Bybit · Analytics</small>
+            </div>
+        </div>
+        <nav id="nav">
+            <button data-page="terminal" class="active">📈 Терминал</button>
+            <button data-page="signals">⚡ Сигналы</button>
+            <button data-page="portfolio">💼 Мои сделки</button>
+            <button data-page="settings">⚙️ Настройки</button>
+        </nav>
+        <div class="spacer"></div>
+        <span class="badge-src" id="data-badge" title="Источник данных">…</span>
+        <div class="conn" id="conn"><span class="dot"></span><span id="conn-text">подключение…</span></div>
+    </header>
+
+    <main>
+        <!-- ============ ТЕРМИНАЛ ============ -->
+        <section class="page active" id="page-terminal">
+            <div class="watch-col">
+                <div class="panel" style="flex:1">
+                    <div class="panel-head">👁 Watchlist <span class="sub" id="watch-count"></span>
+                        <div class="spacer"></div>
+                        <button class="btn btn-sm" id="add-symbol-btn">+ добавить</button>
+                    </div>
+                    <div class="panel-body" id="watchlist"><div class="empty">Загрузка…</div></div>
+                </div>
+            </div>
+            <div class="terminal-col">
+                <div class="panel chart-panel">
+                    <div class="panel-head">
+                        <span class="chart-symbol" id="chart-symbol">BTCUSDT<span class="mk" id="chart-mk">PERP</span></span>
+                        <div class="tf-group" id="tf-group"></div>
+                        <div class="spacer"></div>
+                        <span class="sub" id="chart-source"></span>
+                        <button class="btn btn-accent" id="council-btn">🤖 Совет агентов</button>
+                    </div>
+                    <div id="tv-chart"></div>
+                </div>
+                <div class="panel" style="max-height:220px">
+                    <div class="panel-head">⚡ Последние сигналы по watchlist'у
+                        <div class="spacer"></div>
+                        <span class="sub" id="live-state-label"></span>
+                    </div>
+                    <div class="panel-body" id="mini-feed"><div class="empty">Ждём сигналы…</div></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ СИГНАЛЫ ============ -->
+        <section class="page" id="page-signals">
+            <div class="panel" style="flex:0 0 auto">
+                <div class="panel-head">⚡ Live-лента сигналов
+                    <span class="sub">индикаторные, AI-токены не тратятся · клик по карточке → открыть график</span>
+                    <div class="spacer"></div>
+                    <label class="chk" title="Показывать только сигналы из ваших исторически сильных зон (по ДНК торговли)"><input type="checkbox" id="flt-strong"> 🎯 только мои сильные зоны</label>
+                    <label class="chk"><input type="checkbox" id="ntf-sound"> 🔊 звук</label>
+                    <label class="chk"><input type="checkbox" id="ntf-toasts"> 🔔 всплывашки</label>
+                </div>
+            </div>
+            <div class="panel" style="flex:0 0 auto">
+                <div class="panel-head">📈 Бэктест live-сигналов
+                    <span class="sub">те же правила сканера (авто-подбор, порог, риск) на истории · 0 AI-токенов</span>
+                    <div class="spacer"></div>
+                    <label class="kv" style="margin:0"><label style="width:auto;margin-right:4px">Дней</label>
+                        <input type="number" id="sbt-days" value="7" min="1" max="180" style="width:64px"></label>
+                    <button class="btn" id="sbt-toggle">фильтры</button>
+                    <button class="btn btn-accent" id="sbt-run" title="Прогнать live-сканер по истории выбранных монет/ТФ">▶ Прогнать</button>
+                </div>
+                <div class="panel-body hidden" id="sbt-cfg" style="padding:10px 14px">
+                    <div class="kv"><label>Монеты</label><div class="tf-chips" id="sbt-symbols"></div></div>
+                    <div class="kv"><label>Таймфреймы</label><div class="tf-chips" id="sbt-tfs">
+                        <label class="chk"><input type="checkbox" data-tf="1m">1m</label>
+                        <label class="chk"><input type="checkbox" data-tf="3m">3m</label>
+                        <label class="chk"><input type="checkbox" data-tf="5m" checked>5m</label>
+                        <label class="chk"><input type="checkbox" data-tf="15m">15m</label>
+                        <label class="chk"><input type="checkbox" data-tf="30m">30m</label>
+                        <label class="chk"><input type="checkbox" data-tf="1h">1h</label>
+                        <label class="chk"><input type="checkbox" data-tf="4h">4h</label>
+                    </div></div>
+                    <div class="hint">Цели/стопы берутся из текущих Настроек (ручной риск → ATR → 2:1), порог уверенности — тот же, что у ленты.
+                    Для 1m доступно до 5 дней истории, 5m — до 20, 15m — до 45, старше — до 180.</div>
+                </div>
+                <div class="panel-body" id="sbt-body" style="display:none;max-height:600px;overflow:auto"></div>
+            </div>
+            <div class="panel" style="flex:0 0 auto">
+                <div class="panel-head">🧠 Обучение сканера
+                    <span class="sub">разбирает исход каждого сигнала по монете → глушит проигрышные комбинации, подстраивает порог · 0 AI-токенов</span>
+                    <div class="spacer"></div>
+                    <button class="btn btn-accent" id="learn-curator" title="gpt-6-astra разберёт правила и внесёт корректировки (1 запрос, токены ~копейки)">🤖 AI-куратор</button>
+                    <button class="btn" id="learn-refresh">⟳</button>
+                    <button class="btn" id="learn-reset" title="Стереть всю накопленную статистику обучения">сброс</button>
+                </div>
+                <div class="panel-body" style="max-height:190px;overflow:auto">
+                    <div class="empty" id="learn-body">Статистика появится после первых закрытых сигналов (TP/SL/таймаут/разворот).</div>
+                </div>
+            </div>
+            <div class="feed" id="feed"></div>
+        </section>
+
+        <!-- ============ МОИ СДЕЛКИ ============ -->
+        <section class="page" id="page-portfolio">
+            <div class="pf-grid">
+                <div class="panel" style="flex:0 0 auto">
+                    <div class="panel-head">💼 Анализ ваших сделок на Bybit
+                        <span class="sub" id="pf-source"></span>
+                        <div class="spacer"></div>
+                        <div class="tf-group" id="pf-period">
+                            <button data-days="30">30д</button>
+                            <button data-days="90" class="active">90д</button>
+                            <button data-days="180">180д</button>
+                            <button data-days="365">365д</button>
+                        </div>
+                        <div class="pf-dates" id="pf-dates">
+                            <input type="date" id="pf-from" title="С даты (включительно)">
+                            <span style="color:var(--muted)">—</span>
+                            <input type="date" id="pf-to" title="По дату (включительно)">
+                            <button class="btn" id="pf-dates-clear" title="Сбросить ручной диапазон" style="padding:3px 9px">↺</button>
+                        </div>
+                        <button class="btn" id="pf-reload">⟳ Обновить</button>
+                        <button class="btn" id="pf-dna-btn" title="Числовой разбор каждой сделки на графике (0 токенов)">🧬 ДНК торговли</button>
+                        <button class="btn" id="pf-persona-btn" title="Все агенты анализируют вашу ДНК → профиль вашей торговли (AI)">🔮 Персона (AI)</button>
+                        <button class="btn" id="pf-mystrat-btn" title="Выводит вашу личную стратегию из сделок: монеты/сторона/TF/TP/SL — и подключает её к сканеру (0 токенов)">🎯 Моя стратегия</button>
+                        <button class="btn btn-accent" id="pf-ai-btn">🤖 AI-разбор торговли</button>
+                    </div>
+                    <div id="mystrat-body" class="mystrat hidden"></div>
+                    <div id="pf-loading" class="loader hidden"><div class="spin"></div><span id="pf-loading-text">Загружаю сделки…</span></div>
+                    <div class="panel-body" id="pf-body" style="overflow:visible">
+                        <div class="empty" id="pf-empty">
+                            Введите <b>read-only</b> ключи Bybit в Настройках — или перетащите сюда CSV-экспорт сделок.
+                            <div class="dropzone" id="csv-drop" style="margin-top:14px">📂 Перетащите CSV-экспорт Bybit сюда<br><span style="font-size:11px">(Bybit → Orders → Export → Trade History)</span></div>
+                        </div>
+                        <div id="pf-content" style="display:none">
+                            <div class="stat-cards" id="pf-stats"></div>
+                            <div id="dna-block" style="margin-top:18px"></div>
+                            <div class="pf-cols" style="margin-top:18px">
+                                <div>
+                                    <div class="hint" style="margin:0 0 6px 2px">Кривая эквити (накопленный PnL)</div>
+                                    <div id="equity-chart"></div>
+                                    <div class="hint" style="margin:14px 0 6px 2px">Замеченные паттерны</div>
+                                    <ul class="patterns" id="pf-patterns"></ul>
+                                </div>
+                                <div>
+                                    <div class="hint" style="margin:0 0 6px 2px">По монетам (худшие сверху)</div>
+                                    <table class="tbl" id="pf-symbols"></table>
+                                </div>
+                            </div>
+                            <div class="hint" style="margin:18px 0 6px 2px">Последние сделки — <b>клик по строке открывает график сделки</b> с метками входа/выхода</div>
+                            <table class="tbl" id="pf-recent"></table>
+                        </div>
+                        <div id="pf-review" style="margin-top:18px"></div>
+                        <div id="pf-persona" style="margin-top:18px"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ НАСТРОЙКИ ============ -->
+        <section class="page" id="page-settings">
+            <div class="set-grid">
+                <div class="panel">
+                    <div class="panel-head">🔑 AI (justcode.lol)
+                        <div class="spacer"></div>
+                        <button class="btn btn-sm" id="test-models-btn">🔌 Проверить модели</button>
+                        <button class="btn btn-accent btn-sm" id="save-ai-btn">💾 Сохранить</button>
+                    </div>
+                    <div class="panel-body">
+                        <div class="kv"><label>Base URL</label><input type="text" id="set-ai-url"></div>
+                        <div class="kv"><label>Глобальный API-ключ</label><input type="password" id="set-ai-key" placeholder="один ключ для всех ролей"></div>
+                        <div class="hint">Графики и live-сигналы работают и без ключа (чистые индикаторы).
+                        Ключ нужен для «🤖 Совет агентов» и «💼 AI-разбор» — берётся из вашего
+                        <code>justcode.lol</code> аккаунта. Ключи хранятся только локально в <code>portal/.env</code>.</div>
+                        <div class="hint" style="margin-top:12px"><b>Модели по ролям</b> — после ввода ключа нажмите «Загрузить список моделей»:</div>
+                        <div id="roles-settings" style="margin-top:8px"></div>
+                        <button class="btn btn-sm" id="load-models-btn" style="margin-top:4px">⬇ Загрузить список моделей</button>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-head">📈 Bybit — read-only ключи (для «Мои сделки»)
+                        <div class="spacer"></div>
+                        <button class="btn btn-accent btn-sm" id="save-bybit-btn">💾 Сохранить</button>
+                    </div>
+                    <div class="panel-body">
+                        <div class="kv"><label>Соединение</label><span id="bybit-conn" class="hint">не проверялось</span>
+                            <button class="btn btn-sm" id="ping-bybit-btn">🔍 Проверить</button>
+                            <button class="btn btn-sm" id="diag-bybit-btn" title="Сеть до хостов + проверка read-only ключа">🩺 Диагностика API</button>
+                        </div>
+                        <div id="bybit-diag" class="hint"></div>
+                        <div class="kv"><label>API Key (read-only)</label><input type="password" id="set-bb-key"></div>
+                        <div class="kv"><label>API Secret</label><input type="password" id="set-bb-secret" placeholder="виден только здесь, сохраняется локально"></div>
+                        <div class="hint">⚠️ Создавайте ключ <b>только с правом чтения</b>: Bybit → API Management →
+                        <code>Create New Key</code> → отметьте <code>Read-Only</code>. Платформа сделки никогда не совершает —
+                        эти ключи нужны лишь, чтобы читать вашу историю. Графики работают и без ключей.</div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-head">👁 Watchlist и live-сигналы
+                        <div class="spacer"></div>
+                        <button class="btn btn-accent btn-sm" id="save-live-btn">💾 Сохранить</button>
+                    </div>
+                    <div class="panel-body">
+                        <div class="watchlist-edit" id="wl-chips"></div>
+                        <div class="kv" style="margin-top:10px"><label>Добавить монету</label>
+                            <input type="text" id="wl-add" list="wl-symbols" placeholder="напр. LSKUSDT">
+                            <datalist id="wl-symbols"></datalist>
+                        </div>
+                        <div class="kv"><label>Интервал сканера, сек</label><input type="number" id="set-scan-interval" min="10"></div>
+                        <div class="kv"><label>Таймфреймы сигналов</label>
+                            <div class="tf-chips" id="set-tf-chips">
+                                <label class="chk"><input type="checkbox" data-tf="1m">1m</label>
+                                <label class="chk"><input type="checkbox" data-tf="3m">3m</label>
+                                <label class="chk"><input type="checkbox" data-tf="5m" checked>5m</label>
+                                <label class="chk"><input type="checkbox" data-tf="15m">15m</label>
+                                <label class="chk"><input type="checkbox" data-tf="30m">30m</label>
+                                <label class="chk"><input type="checkbox" data-tf="1h">1h</label>
+                                <label class="chk"><input type="checkbox" data-tf="4h">4h</label>
+                            </div>
+                        </div>
+                        <div class="kv"><label>Порог уверенности (0-1)</label><input type="number" id="set-min-conf" step="0.05" min="0" max="1"></div>
+                        <div class="kv"><label>Правило TP/SL</label>
+                            <label class="chk" title="ВКЛ: классика мин.TP 2% / SL 1% (RR 2:1). ВЫКЛ: цели по волатильности (ATR) графика"><input type="checkbox" id="set-rr-binding"> привязка 2:1 (мин. TP 2%)</label>
+                        </div>
+                        <div class="kv"><label>Ручной риск-фактор</label>
+                            <div class="risk-row">
+                                <input type="number" id="set-risk-tp" step="0.1" min="0" placeholder="TP %" title="Ручной TP в % (0 = выкл). Приоритет над привязкой 2:1 и ATR">
+                                <input type="number" id="set-risk-sl" step="0.1" min="0" placeholder="SL %" title="Ручной SL в % (0 = выкл)">
+                                <input type="number" id="set-risk-hold" step="5" min="0" placeholder="мин" title="Целевая длительность сделки, минут (0 = не задано)">
+                            </div>
+                        </div>
+                        <div class="hint" style="margin-top:-4px">TP/SL &gt; 0 → сигналы получают именно эти цели (приоритет над 2:1 и ATR). 0 = не вмешиваться.</div>
+                        <div class="kv"><label>Депозит и риск</label>
+                            <div class="risk-row">
+                                <input type="number" id="set-deposit" step="50" min="0" placeholder="$ деп" title="Ваш депозит, $ — для расчёта объёма позиции в сигналах">
+                                <input type="number" id="set-risk-pct" step="0.5" min="0" placeholder="риск %" title="Риск на сделку в % депозита (напр. 3)">
+                                <input type="number" id="set-leverage" step="1" min="1" max="100" placeholder="плечо" title="Плечо для расчёта маржи/объёма (напр. 20)">
+                            </div>
+                        </div>
+                        <div class="kv"><label>Стратегия сигналов</label>
+                            <select id="set-signal-strategy"><option value="auto">⚡ auto — подбор по графику</option></select>
+                        </div>
+                        <div class="hint">Сигналы считаются индикаторами математически — <b>AI-токены не тратятся</b>.
+                        AI подключается только по кнопке «Совет агентов».</div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-head">🛡️ Правила и хранилище</div>
+                    <div class="panel-body">
+                        <div class="kv"><label>Макс. сделок в день</label><input type="number" id="set-max-trades" min="0" placeholder="0" title="0 = без лимита"></div>
+                        <div class="hint" style="margin-top:-4px">0 — без ограничений (лимит снят по запросу).</div>
+                        <div class="kv"><label>Мин. Take-Profit, %</label><input type="number" id="set-min-tp" step="0.1" min="0.1"></div>
+                        <div class="kv"><label>Макс. удержание, ч</label><input type="number" id="set-max-hold" step="0.5" min="0.5"></div>
+                        <div class="kv"><label>Дефолт Stop-Loss, %</label><input type="number" id="set-sl" step="0.1" min="0.1"></div>
+                        <div class="hint" style="margin-top:12px">Настройки хранятся локально в <code id="env-path">portal/.env</code>
+                        (файл создаётся автоматически при первом запуске; в git/архив не попадает —
+                        ключи не утекут). После «Сохранить» всё применяется мгновенно, перезапуск не нужен.</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+</div>
+
+<!-- Модалка совета агентов -->
+<div class="modal-wrap" id="council-modal">
+    <div class="modal">
+        <div class="modal-head">
+            <span>🤖 Совет агентов</span>
+            <span class="sub" id="council-label" style="font-weight:500;color:var(--muted);font-size:12px"></span>
+            <button class="x" id="council-close">✕</button>
+        </div>
+        <div class="modal-body" id="council-body"></div>
+    </div>
+</div>
+
+<!-- Модалка графика сделки -->
+<div class="modal-wrap" id="deal-modal">
+    <div class="modal">
+        <div class="modal-head">
+            <span id="deal-title">📌 Сделка</span>
+            <span class="sub" id="deal-sub" style="font-weight:500;color:var(--muted);font-size:12px"></span>
+            <button class="x" id="deal-close">✕</button>
+        </div>
+        <div class="modal-body">
+            <div id="deal-chart" style="height:340px"></div>
+            <div id="deal-info" style="margin-top:14px"></div>
+        </div>
+    </div>
+</div>
+
+<div id="toasts"></div>
+
+<script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
+<script src="/static/js/neuro.js"></script>
+<script src="/static/js/portal.js"></script>
+</body>
+</html>

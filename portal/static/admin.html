@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin — партнёры</title>
+<link rel="icon" type="image/png" href="/static/img/logo.png">
+<style>
+:root{color-scheme:dark;--bg:#060707;--acc:#9dffc9;--ok:#5ee6a8;--tx:#f2f5f3;--mut:#9aa69f;--card:#101312;--line:rgba(255,255,255,.07)}
+*{box-sizing:border-box;margin:0;font-family:'Inter','Segoe UI',system-ui,Arial}
+body{background:var(--bg);color:var(--tx);padding:20px}
+.wrap{max-width:900px;margin:0 auto}
+h1{font-size:20px;margin:8px 0 14px}.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px;margin-bottom:14px}
+input,select{margin:4px 6px 4px 0;padding:10px;border-radius:10px;border:1px solid var(--line);background:#0a0d0c;color:var(--tx);font-size:13px}
+.btn{background:#fff;color:#060707;font-weight:700;border:0;padding:10px 16px;border-radius:999px;cursor:pointer;font-size:13px}
+table{width:100%;font-size:12.5px;border-collapse:collapse}th{color:var(--mut);text-align:left;font-weight:600;padding:6px}td{padding:8px 6px;border-top:1px solid var(--line)}
+.pill{padding:3px 10px;border-radius:999px;font-size:11.5px;font-weight:700;background:rgba(94,230,168,.12);color:var(--ok)}
+code{background:#0a0d0c;padding:2px 8px;border-radius:6px;color:var(--acc)}
+.mut{color:var(--mut);font-size:12px;line-height:1.6}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div style="display:flex;align-items:center;gap:10px"><img src="/static/img/logo.png" style="width:32px;height:32px;border-radius:50%;mix-blend-mode:screen"><h1>TradeVision · Admin</h1></div>
+
+  <div class="card">
+    <span class="mut">ADMIN_TOKEN из portal/.env (хранится только в этом браузере):</span><br>
+    <input id="tok" placeholder="x-admin-token" style="width:340px">
+    <button class="btn" onclick="saveTok()">Сохранить</button>
+    <span id="tokMsg" class="mut" style="display:inline;margin-left:10px"></span>
+  </div>
+
+  <div class="card">
+    <h1 style="font-size:15px">Новый траффер</h1>
+    <input id="code" placeholder="КОД (лат, 3-32)">
+    <input id="label" placeholder="Имя/метка">
+    <input id="pct" type="number" value="30" style="width:80px"> %
+    <button class="btn" onclick="createP()">Создать</button>
+    <span id="cMsg" class="mut" style="display:inline;margin-left:10px"></span>
+  </div>
+
+  <div class="card">
+    <h1 style="font-size:15px">Партнёры</h1>
+    <table id="tbl"></table>
+  </div>
+  <span class="mut">Выплаты: нажмите «paid», когда отправили USDT вручную — запишется отметка. Атрибуция кликов/рег/оплат идёт сама по ?t=CODE.</span>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+$('tok').value=localStorage.getItem('adm_tok')||'';
+function H(){return{'x-admin-token':$('tok').value,'Content-Type':'application/json'};}
+async function saveTok(){localStorage.setItem('adm_tok',$('tok').value);$('tokMsg').textContent='ок';load();}
+async function createP(){
+  const r=await fetch('/api/admin/partners',{method:'POST',headers:H(),
+    body:JSON.stringify({code:$('code').value,label:$('label').value,pct:+$('pct').value||30})});
+  const d=await r.json().catch(()=>({}));
+  $('cMsg').innerHTML=r.ok?`✅ создан. Секрет stat-ключа: <code>${d.secret}</code> (покажите трафферу для /api/partner/stat)`:`❌ ${d.detail||'err'}`;
+  if(r.ok){$('code').value='';$('label').value='';load();}
+}
+async function load(){
+  const r=await fetch('/api/admin/partners',{headers:H()});
+  if(!r.ok){$('tbl').innerHTML='<tr><td class="mut">403 — проверьте токен</td></tr>';return;}
+  const d=await r.json();const rows=(d.partners||[]);
+  $('tbl').innerHTML='<tr><th>code</th><th>клики</th><th>реги</th><th>оплаты</th><th>холд</th><th>к выплате</th><th>выплачено</th><th></th></tr>'+
+    rows.map(p=>`<tr><td><b>${p.code}</b><br><span class="mut">${p.label||''} · ${p.pct}%</span></td>
+    <td>${p.clicks}</td><td>${p.signups}</td><td><span class="pill">${p.sales}</span></td>
+    <td>$${p.earned_pending}</td><td><b style="color:var(--ok)">$${p.earned_available}</b></td>
+    <td>$${p.earned_paid}</td>
+    <td><button class="btn" style="padding:6px 12px" onclick="copyLink('${p.code}')">link</button>
+        <button class="btn" style="padding:6px 12px" onclick="pay('${p.code}')">paid</button></td></tr>`).join('')
+    ||'<tr><td class="mut">пока нет партнёров</td></tr>';
+}
+function copyLink(c){navigator.clipboard.writeText(location.origin+'/?t='+c);}
+async function pay(c){
+  const tx=prompt('Отметить все доступные начисления "'+c+'" выплаченными. TX выплаты (можно пусто):','')??'';
+  const r=await fetch('/api/admin/partner/pay',{method:'POST',headers:H(),body:JSON.stringify({code:c,tx_ref:tx})});
+  load();
+}
+if($('tok').value)load();
+</script>
+</body>
+</html>

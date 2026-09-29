@@ -1,0 +1,15 @@
+# TradeVision — Caddy reverse proxy (auto-HTTPS за 1 минуту).
+# Замените your-domain.com на свой домен; DNS A-запись → IP VPS должна быть готова ДО запуска.
+
+your-domain.com {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:3005
+
+    # базовые заголовки безопасности (X-Frame-Options осознанно НЕ ставим:
+    # превью-стенды/лендинги партнёров могут фреймить)
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy strict-origin-when-cross-origin
+        -Server
+    }
+}

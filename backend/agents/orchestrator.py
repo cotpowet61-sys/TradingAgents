@@ -1,0 +1,312 @@
+"""
+Оркестратор мультиагентной системы.
+
+Два режима:
+  1) analyze(): полный консенсус 5 агентов по одному символу (для live-сигналов и UI).
+  2) scan_market(): прогон по всем символам, отбор тех, где консенсус даёт сигнал.
+
+Консенсус: средневзвешенная уверенность по стороне (с весом риск-менеджера).
+Сигнал публикуется, если уверенность >= MIN_CONFIDENCE и сторона != NEUTRAL.
+Все ограничения (<=30 сделок/день, TP>=2%, удержание<=4ч) соблюдаются стратегией/движком.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+from typing import List, Optional
+
+from config import settings
+from data.market_data import MarketData, Candle
+from strategies.base import Signal, SignalSide
+from strategies.registry import build_strategy
+from strategies import indicators as ta
+from . import roles
+
+
+class Orchestrator:
+    def __init__(self):
+        self.market = MarketData()
+        self.lock = asyncio.Lock()
+
+    # ------------------------------------------------------------------ #
+    # Подготовка снимка рынка (общая для analyze и analyze_stream)
+    # ------------------------------------------------------------------ #
+    async def _prepare(self, symbol: str, strategy_type: str, timeframe: str, params: Optional[dict]):
+        auto_mode = strategy_type in (None, "", "auto")
+        candles = await self.market.get_klines(symbol, timeframe)
+
+        strategy_auto = None
+        candidates: list = []
+        if auto_mode:
+            # Стратегию не навязываем: подбираем по свежему графику
+            # (профиль оптимизатора → быстрый бэктест всех стратегий → fallback).
+            # Агенты видят сравнение и могут опираться на собственный анализ.
+            from strategies.selector import get_selector
+            strategy_type, candidates, src = get_selector().auto_pick(
+                symbol, timeframe, candles)
+            strategy_auto = {"enabled": True, "source": src, "candidates": candidates}
+
+        strategy = build_strategy(strategy_type, params=params)
+        if strategy is None:
+            raise ValueError(f"Неизвестная стратегия: {strategy_type}")
+        strat_sig: Optional[Signal] = strategy.generate(candles, len(candles) - 1) if candles else None
+        features = ta.compute_feature_summary(candles)
+        recent = self._recent_bars(candles, 5)
+        snapshot = {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "max_trades": settings.MAX_TRADES_PER_DAY,
+            "min_tp": settings.MIN_TP_PCT,
+            "max_hold": settings.MAX_HOLD_HOURS,
+            "sl": settings.DEFAULT_SL_PCT,
+            "strategy": strategy.name,
+            "strategy_auto": strategy_auto,
+            "strategy_signal": strat_sig.side.value + f" (conf={strat_sig.confidence})" if strat_sig else "нет данных",
+            "features": features,
+            "recent": recent,
+        }
+        return candles, strategy, strat_sig, features, snapshot
+
+    def _agent_view(self, role_key: str, verdict: dict) -> dict:
+        """Представление вердикта агента для ответа API."""
+        return {
+            "role": role_key,
+            "name": roles.ROLES[role_key].name,
+            "icon": roles.ROLES[role_key].icon,
+            "model": settings.model_role(role_key)["model"],
+            "demo": settings.model_role(role_key)["api_key"] == "",
+            "enabled": settings.agent_enabled(role_key),
+            **verdict,
+        }
+
+    @staticmethod
+    def _stub_verdicts(reason: str) -> dict:
+        """Заглушки для всех ролей (0 токенов) — индикаторный режим."""
+        return {k: {"side": "NEUTRAL", "confidence": 0.0, "reason": reason,
+                    "risks": [], "thinking": [],
+                    "key_levels": {"support": None, "resistance": None},
+                    "disabled": True} for k in ("strategist", "momentum", "contrarian", "macro", "risk")}
+
+    # ------------------------------------------------------------------ #
+    # Анализ одного символа
+    # ------------------------------------------------------------------ #
+    async def analyze(self, symbol: str, strategy_type: str = "momentum_breakout",
+                      timeframe: str = None, params: Optional[dict] = None,
+                      use_agents: bool = True) -> dict:
+        timeframe = timeframe or settings.DEFAULT_TIMEFRAME
+        candles, strategy, strat_sig, features, snapshot = await self._prepare(
+            symbol, strategy_type, timeframe, params)
+
+        keys = ["strategist", "momentum", "contrarian", "macro", "risk"]
+        if use_agents:
+            results = await asyncio.gather(*(roles.get_agent_verdict(k, snapshot) for k in keys))
+            verdicts = dict(zip(keys, results))
+        else:
+            # авто-анализ LLM выключен — фоновый сканер только по индикаторам (0 токенов)
+            verdicts = self._stub_verdicts("Авто-анализ моделей выключен (включается в Настройках/вкладке Монета)")
+
+        consensus = self._consensus(verdicts, strat_sig)
+        final = self._finalize(symbol, timeframe, strat_sig, consensus)
+
+        return {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "price": features.get("price"),
+            "features": features,
+            "strategy": strategy.config_dict(),
+            "strategy_auto": snapshot.get("strategy_auto"),
+            "strategy_signal": strat_sig.to_dict() if strat_sig else None,
+            "agents": [self._agent_view(k, v) for k, v in verdicts.items()],
+            "consensus": consensus,
+            "signal": final,
+        }
+
+    # ------------------------------------------------------------------ #
+    # Стриминг-анализ: отдаёт события по мере готовности каждого агента.
+    # События: snapshot, agent, consensus, done.
+    # ------------------------------------------------------------------ #
+    async def analyze_stream(self, symbol: str, strategy_type: str = "momentum_breakout",
+                             timeframe: str = None, params: Optional[dict] = None):
+        timeframe = timeframe or settings.DEFAULT_TIMEFRAME
+        candles, strategy, strat_sig, features, snapshot = await self._prepare(
+            symbol, strategy_type, timeframe, params)
+
+        yield ("snapshot", {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "price": features.get("price"),
+            "features": features,
+            "strategy": strategy.config_dict(),
+            "strategy_auto": snapshot.get("strategy_auto"),
+            "strategy_signal": strat_sig.to_dict() if strat_sig else None,
+        })
+
+        keys = ["strategist", "momentum", "contrarian", "macro", "risk"]
+        tasks = {asyncio.create_task(roles.get_agent_verdict(k, snapshot)): k for k in keys}
+        verdicts = {}
+        pending = set(tasks.keys())
+        while pending:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for fut in done:
+                k = tasks[fut]
+                try:
+                    v = fut.result()
+                except Exception as e:
+                    v = {"side": "NEUTRAL", "confidence": 0.0, "reason": f"Ошибка: {e}",
+                         "risks": [], "thinking": [], "key_levels": {}}
+                verdicts[k] = v
+                yield ("agent", self._agent_view(k, v))
+
+        consensus = self._consensus(verdicts, strat_sig)
+        final = self._finalize(symbol, timeframe, strat_sig, consensus)
+        yield ("consensus", {"consensus": consensus, "signal": final})
+        yield ("done", {})
+
+    def _recent_bars(self, candles: List[Candle], n: int) -> str:
+        if not candles:
+            return ""
+        lines = []
+        for c in candles[-n:]:
+            lines.append(f"O={c.open} H={c.high} L={c.low} C={c.close} V={c.volume}")
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------ #
+    # Консенсус
+    # ------------------------------------------------------------------ #
+    def _consensus(self, verdicts: dict, strat_sig: Optional[Signal]) -> dict:
+        weights = {
+            "strategist": 1.2, "momentum": 1.2, "contrarian": 0.8,
+            "macro": 0.6, "risk": 1.5,
+        }
+        long_score = short_score = 0.0   # взвешенные по уверенности и весу роли
+        w_dir = 0.0                      # суммарный вес «направленных» голосов (не NEUTRAL)
+        total_w = 0.0
+        detail = {}
+        for k, v in verdicts.items():
+            conf = v.get("confidence", 0.0)
+            if v.get("disabled"):
+                # выключенный тумблером агент: голос и вес полностью исключаем
+                detail[k] = {"side": "NEUTRAL", "confidence": 0.0, "disabled": True}
+                continue
+            w = weights.get(k, 1.0)
+            total_w += w
+            if v.get("side") == "LONG":
+                long_score += conf * w
+                w_dir += w
+            elif v.get("side") == "SHORT":
+                short_score += conf * w
+                w_dir += w
+            detail[k] = {"side": v.get("side"), "confidence": conf}
+
+        # Вес индикаторному сигналу (связка «стратегия + AI»)
+        if strat_sig and strat_sig.side in (SignalSide.LONG, SignalSide.SHORT):
+            w = 1.0
+            total_w += w
+            w_dir += w
+            if strat_sig.side == SignalSide.LONG:
+                long_score += strat_sig.confidence * w
+            else:
+                short_score += strat_sig.confidence * w
+            detail["strategy"] = {"side": strat_sig.side.value, "confidence": strat_sig.confidence}
+
+        # Наклон с учётом всех голосов (включая NEUTRAL) — для отображения
+        bull_bear = (long_score - short_score) / total_w if total_w else 0.0
+
+        if long_score > short_score:
+            side = "LONG"
+        elif short_score > long_score:
+            side = "SHORT"
+        else:
+            side = "NEUTRAL"
+
+        # Уверенность = чистый перевес среди голосов «с мнением» (0..1).
+        # NEUTRAL-голоса не размывают уверенность, но отражаются в bull_bear.
+        margin = abs(long_score - short_score)
+        confidence = (margin / w_dir) if w_dir > 0 else 0.0
+        # Пересчёт перевеса в той же шкале, что и confidence (для согласованности UI)
+        long_conf = (long_score / w_dir) if w_dir else 0.0
+        short_conf = (short_score / w_dir) if w_dir else 0.0
+
+        return {
+            "side": side,
+            "confidence": round(min(confidence, 1.0), 3),
+            "bull_bear": round(bull_bear, 3),
+            "detail": detail,
+            "agreement": round(min(confidence, 1.0), 3),
+        }
+
+    def _finalize(self, symbol: str, timeframe: str, strat_sig: Optional[Signal], consensus: dict) -> dict:
+        """Формируем финальный сигнал с конкретными уровнями входа/TP/SL."""
+        if consensus["side"] not in ("LONG", "SHORT") or consensus["confidence"] < settings.MIN_CONFIDENCE:
+            return {
+                "side": "NEUTRAL", "entry": None, "tp": None, "sl": None,
+                "tp_pct": settings.MIN_TP_PCT, "sl_pct": settings.DEFAULT_SL_PCT,
+                "confidence": consensus["confidence"],
+                "action": "WAIT",
+                "reason": f"Консенсус не достиг порога уверенности {settings.MIN_CONFIDENCE}",
+            }
+        # Используем уровни из стратегии, если есть, иначе по текущей цене
+        if strat_sig and strat_sig.side.value == consensus["side"]:
+            entry, tp, sl = strat_sig.entry, strat_sig.tp, strat_sig.sl
+        else:
+            # entry по цене из features (передадим через signal позже в сканере)
+            entry = None
+            tp = sl = None
+        side = consensus["side"]
+        if side == "LONG" and not settings.ALLOW_LONG:
+            return self._deny("Лонг отключён настройками")
+        if side == "SHORT" and not settings.ALLOW_SHORT:
+            return self._deny("Шорт отключён настройками")
+        return {
+            "side": side, "entry": entry, "tp": tp, "sl": sl,
+            "tp_pct": settings.MIN_TP_PCT, "sl_pct": settings.DEFAULT_SL_PCT,
+            "confidence": consensus["confidence"],
+            "action": "BUY" if side == "LONG" else "SELL",
+            "reason": f"Консенсус {consensus['confidence']} по стороне {side}",
+        }
+
+    def _deny(self, reason: str) -> dict:
+        return {"side": "NEUTRAL", "entry": None, "tp": None, "sl": None,
+                "tp_pct": settings.MIN_TP_PCT, "sl_pct": settings.DEFAULT_SL_PCT,
+                "confidence": 0.0, "action": "WAIT", "reason": reason}
+
+    # ------------------------------------------------------------------ #
+    # Скан всего рынка. strategy_type="auto" — подбирает лучшую стратегию
+    # для каждой монеты из профиля оптимизатора (адаптивный режим).
+    # LLM-агенты вызываются только если AGENTS_AUTO_ANALYSIS=true — иначе
+    # фоновый сканер работает чисто на индикаторах (токены не тратятся).
+    # ------------------------------------------------------------------ #
+    async def scan_market(self, symbols: Optional[List[str]] = None,
+                          strategy_type: str = "auto",
+                          timeframe: str = None) -> list[dict]:
+        symbols = symbols or settings.symbols
+        timeframe = timeframe or settings.DEFAULT_TIMEFRAME
+        use_agents = bool(settings.AGENTS_AUTO_ANALYSIS)
+
+        # Ограничиваем параллелизм, чтобы не перегружать API
+        sem = asyncio.Semaphore(4)
+
+        async def one(sym):
+            async with sem:
+                try:
+                    # «auto» резолвится в _prepare: быстрый бэктест по графику (кэш 15 мин)
+                    return await self.analyze(sym, strategy_type, timeframe, use_agents=use_agents)
+                except Exception as e:
+                    return {"symbol": sym, "error": str(e), "signal": {"side": "NEUTRAL", "action": "WAIT"}}
+
+        results = await asyncio.gather(*(one(s) for s in symbols))
+        # Сортируем: сначала сигналы, по убыванию уверенности
+        with_signal = [r for r in results if r.get("signal", {}).get("action") in ("BUY", "SELL")]
+        rest = [r for r in results if r not in with_signal]
+        with_signal.sort(key=lambda r: -r["signal"]["confidence"])
+        return with_signal + rest
+
+
+_orchestrator: Optional[Orchestrator] = None
+
+
+def get_orchestrator() -> Orchestrator:
+    global _orchestrator
+    if _orchestrator is None:
+        _orchestrator = Orchestrator()
+    return _orchestrator

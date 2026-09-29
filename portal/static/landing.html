@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Trading Coach — neural signal engine</title>
+<link rel="icon" type="image/png" href="/static/img/logo.png">
+<style>
+:root{color-scheme:dark;--bg:#060707;--card:#101312;--card2:#161a19;--line:rgba(255,255,255,.07);
+--tx:#f2f5f3;--mut:#9aa69f;--ok:#5ee6a8;--bad:#ff6b7a;--acc:#d8ffe9}
+*{box-sizing:border-box;margin:0;font-family:'Inter','SF Pro Display','Segoe UI',system-ui,Arial,sans-serif}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--tx);overflow-x:hidden;letter-spacing:-.01em}
+canvas#neuro{position:fixed;inset:0;width:100%;height:100%;z-index:0;opacity:.55;pointer-events:none}
+.plasma{position:fixed;border-radius:50%;filter:blur(120px);opacity:.35;z-index:0;pointer-events:none;animation:drift 22s ease-in-out infinite alternate}
+.p1{width:60vw;height:44vw;background:radial-gradient(circle,#c9ffe0 0%,transparent 60%);top:-14%;right:-12%}
+.p2{width:44vw;height:34vw;background:radial-gradient(circle,#8affc6 0%,transparent 65%);bottom:-8%;left:-14%;animation-delay:-8s}
+.p3{width:30vw;height:24vw;background:radial-gradient(circle,#5ee6a8 0%,transparent 62%);top:38%;left:34%;opacity:.16;animation-delay:-14s}
+@keyframes drift{to{transform:translate(6vw,4vh) scale(1.12)}}
+.z{position:relative;z-index:1}
+.wrap{max-width:1240px;margin:0 auto;padding:22px 24px}
+/* ---------- nav ---------- */
+nav{display:flex;align-items:center;gap:18px;padding:10px 0}
+.logo{display:flex;align-items:center;gap:10px;font-weight:700;font-size:17px}
+.logo img{width:34px;height:34px;border-radius:50%;mix-blend-mode:screen;animation:breathe 4s ease-in-out infinite}
+@keyframes breathe{50%{filter:brightness(1.25) drop-shadow(0 0 8px rgba(94,230,168,.5))}}
+.chips{display:flex;gap:4px;background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:999px;padding:5px;margin:0 auto}
+.chips a{color:var(--mut);text-decoration:none;font-size:13.5px;padding:7px 14px;border-radius:999px;transition:.2s}
+.chips a:hover{color:var(--tx);background:rgba(255,255,255,.07)}
+.btn{background:#fff;color:#060707;font-weight:700;border:0;padding:12px 22px;border-radius:999px;font-size:14px;cursor:pointer;text-decoration:none;display:inline-block;transition:.2s;letter-spacing:0}
+.btn:hover{transform:translateY(-1px);box-shadow:0 0 24px rgba(217,255,233,.25)}
+.btn.ghost{background:transparent;border:1px solid rgba(255,255,255,.18);color:var(--tx)}
+/* ---------- hero ---------- */
+.hero{position:relative;text-align:left;padding:84px 0 40px;max-width:780px}
+.hero-grid{display:grid;grid-template-columns:1.05fr .95fr;gap:30px;max-width:none;align-items:center}
+.hero-text{position:relative;max-width:640px}
+.brain-wrap{position:relative;height:520px}
+#brain{width:100%;height:100%}
+.livechip{position:absolute;top:8px;left:50%;transform:translateX(-50%);background:rgba(255,60,80,.12);border:1px solid rgba(255,90,110,.35);color:#ff8a97;font-size:11px;font-weight:700;padding:4px 12px;border-radius:999px;z-index:2;animation:blink 2s infinite}
+.agent-chips{position:absolute;inset:0;pointer-events:none}
+.achip{position:absolute;background:rgba(10,13,12,.88);border:1px solid var(--line);border-left:3px solid var(--ac,#5ee6a8);border-radius:10px;padding:8px 11px;font-size:10.5px;color:var(--mut);backdrop-filter:blur(5px);max-width:190px;animation:float 6s ease-in-out infinite}
+.achip b{display:block;color:var(--tx);font-size:11px;font-weight:600;margin:2px 0}
+.achip .st-complete{color:var(--ok)}.achip .st-run{color:#ffd278}
+.achip .zone{color:var(--ac,#5ee6a8);font-weight:700;font-size:9.5px;letter-spacing:.08em}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;background:rgba(94,230,168,.08);border:1px solid rgba(94,230,168,.25);color:var(--ok);font-size:12.5px;padding:6px 14px;border-radius:999px;margin-bottom:22px}
+.eyebrow s{width:7px;height:7px;border-radius:50%;background:var(--ok);animation:blink 1.4s infinite}
+@keyframes blink{50%{opacity:.2}}
+h1{font-size:clamp(38px,5.4vw,66px);line-height:1.04;font-weight:800;letter-spacing:-.03em}
+h1 em{font-style:normal;background:linear-gradient(90deg,#fff,#9dffc9);-webkit-background-clip:text;color:transparent}
+.sub{color:var(--mut);font-size:17px;line-height:1.6;margin:22px 0 30px;max-width:620px}
+.cta-row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.micro{font-size:12.5px;color:var(--mut);margin-top:14px}
+.hero-chips{position:absolute;inset:0;pointer-events:none}
+.hchip{position:absolute;background:rgba(16,19,18,.85);border:1px solid var(--line);border-radius:12px;padding:9px 12px;font-size:12px;color:var(--mut);backdrop-filter:blur(6px);animation:float 7s ease-in-out infinite}
+.hchip b{display:block;color:var(--tx);font-size:13px}
+.hchip .w{color:var(--ok)}.hchip .l{color:var(--bad)}
+@keyframes float{50%{transform:translateY(-10px)}}
+.strip{display:flex;gap:34px;align-items:center;justify-content:center;padding:30px 0 8px;color:#5b665f;font-size:14px;font-weight:600;flex-wrap:wrap;border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin-top:36px}
+/* ---------- bento ---------- */
+.bento{display:grid;grid-template-columns:repeat(12,1fr);gap:14px;margin:44px 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:24px;padding:24px;position:relative;overflow:hidden}
+.card::before{content:'';position:absolute;inset:0;background:radial-gradient(600px 200px at 20% -10%,rgba(217,255,233,.05),transparent 55%);pointer-events:none}
+.card h3{font-size:15px;font-weight:700;margin-bottom:4px}
+.card .hint{color:var(--mut);font-size:12.5px;line-height:1.55}
+.c6{grid-column:span 6}.c4{grid-column:span 4}.c8{grid-column:span 8}.c12{grid-column:span 12}
+.statnum{font-size:44px;font-weight:800;letter-spacing:-.03em;color:var(--acc)}
+.statnum small{font-size:15px;color:var(--mut);font-weight:600;letter-spacing:0}
+.ring{position:relative;width:132px;height:132px;margin:10px auto 4px}
+.ring canvas{width:100%;height:100%}
+.ring .inner{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+.ring .inner b{font-size:30px;color:var(--acc)}
+.ring .inner small{color:var(--mut);font-size:11px}
+table{width:100%;font-size:12.5px;border-collapse:collapse}
+td{padding:7px 4px;border-bottom:1px solid rgba(255,255,255,.05);color:var(--mut)}
+td.w{color:var(--ok)}td.l{color:var(--bad)}td:first-child{color:#6c7a72}
+.spark{display:flex;align-items:flex-end;gap:2px;height:74px;margin-top:12px}
+.spark i{flex:1;background:linear-gradient(180deg,#9dffc9,rgba(94,230,168,.25));border-radius:2px 2px 0 0;min-height:2px;animation:grow 1.2s ease backwards}
+@keyframes grow{from{transform:scaleY(0)}}
+.pulsefeed{font-size:12px;color:var(--mut);line-height:2;max-height:150px;overflow:hidden}
+.pulsefeed b{color:var(--tx);font-weight:600}
+.pulsefeed .w{color:var(--ok)}.pulsefeed .l{color:var(--bad)}
+/* ---------- sections ---------- */
+h2{font-size:clamp(28px,3.6vw,44px);font-weight:800;letter-spacing:-.03em;text-align:center;margin:76px 0 8px}
+.sub2{color:var(--mut);text-align:center;font-size:15px;max-width:560px;margin:0 auto 34px;line-height:1.6}
+.feat{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.feat .card p{color:var(--mut);font-size:13.5px;line-height:1.6;margin-top:8px}
+.feat .card .ic{font-size:26px}
+/* ---------- pricing ---------- */
+.price{max-width:520px;margin:0 auto;text-align:center;padding:36px}
+.price .big{font-size:64px;font-weight:800;letter-spacing:-.04em;color:var(--acc)}
+.price .big small{font-size:20px;color:var(--mut);font-weight:600}
+.inc{text-align:left;margin:20px auto;max-width:360px;font-size:14px;line-height:2.1;color:var(--mut)}
+.inc b{color:var(--tx)}
+.anchor{background:rgba(94,230,168,.07);border:1px solid rgba(94,230,168,.2);border-radius:14px;padding:12px 16px;font-size:13px;color:var(--ok);margin:16px 0 22px;line-height:1.55}
+/* ---------- faq/footer ---------- */
+.faq{max-width:760px;margin:0 auto}
+.faq details{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px 20px;margin-bottom:10px}
+.faq summary{cursor:pointer;font-weight:600;font-size:14.5px;list-style:none}
+.faq summary::after{content:'+';float:right;color:var(--mut)}
+.faq details[open] summary::after{content:'–'}
+.faq p{color:var(--mut);font-size:13.5px;line-height:1.65;margin-top:10px}
+footer{border-top:1px solid var(--line);margin-top:60px;padding:26px 0 40px;color:#5b665f;font-size:12px;line-height:1.7}
+/* ---------- auth modal ---------- */
+.modal{position:fixed;inset:0;background:rgba(4,6,5,.7);backdrop-filter:blur(6px);display:none;align-items:center;justify-content:center;z-index:50}
+.modal.on{display:flex}
+.modal .card{width:min(400px,92vw)}
+.modal input{width:100%;margin:6px 0;padding:12px 14px;border-radius:12px;border:1px solid var(--line);background:#0a0d0c;color:var(--tx);font-size:14px}
+.err{color:var(--bad);font-size:12.5px;min-height:16px;margin:6px 0}
+@media(max-width:900px){.c6,.c4,.c8{grid-column:span 12}.feat{grid-template-columns:1fr}
+.hero-grid{grid-template-columns:1fr}.brain-wrap{display:none}
+.hero-chips{display:none}.chips{display:none}}
+</style>
+</head>
+<body>
+<canvas id="neuro"></canvas>
+<div class="plasma p1"></div><div class="plasma p2"></div><div class="plasma p3"></div>
+
+<div class="z wrap">
+  <nav>
+    <div class="logo"><img src="/static/img/logo.png" alt=""><span id="brand">TradeVision</span></div>
+    <div class="chips">
+      <a href="#track">Track record</a><a href="#features">Features</a>
+      <a href="#pricing">Pricing</a><a href="#faq">FAQ</a>
+    </div>
+    <a class="btn ghost" href="#" onclick="openAuth('login');return false">Log in</a>
+    <a class="btn" href="#" onclick="openAuth('signup');return false">Create Account</a>
+  </nav>
+
+  <section class="hero hero-grid">
+    <div class="hero-text">
+      <div class="hero-chips" id="heroChips"></div>
+      <span class="eyebrow"><s></s> LIVE SCANNER · signals verified on-chain of time</span>
+      <h1>Your signals keep lying to you.<br><em>Ours learn from every trade.</em></h1>
+      <p class="sub">A neural trading coach that scans 20+ strategies in real time, blocks the setups that lose <b>your</b> money, and calculates the exact position size for your deposit. Fully verified public track record — every signal logged, nothing edited retroactively.</p>
+      <div class="cta-row">
+        <a class="btn" href="#" onclick="openAuth('signup');return false" style="font-size:16px;padding:15px 30px">Get instant access — $100/mo</a>
+        <a class="btn ghost" href="#track">See the verified track ↓</a>
+      </div>
+      <p class="micro">USDT (TRC20 / BEP20) · access activates automatically in 1–2 minutes · no card, no KYC · cancel anytime</p>
+    </div>
+    <div class="brain-wrap">
+      <div class="livechip">🔴 LIVE</div>
+      <canvas id="brain"></canvas>
+      <div class="agent-chips" id="agentChips"></div>
+    </div>
+  </section>
+
+  <div class="strip">
+    <span>⬡ Bybit</span><span>⬡ OKX</span><span>⬡ Binance</span><span>₮ USDT · TRC20</span>
+    <span>₮ USDT · BEP20</span><span>✈ Telegram alerts</span><span>🤖 5 AI agents</span>
+  </div>
+
+  <section class="bento" id="track">
+    <div class="card c4">
+      <h3>Strong-zone win rate</h3>
+      <p class="hint">filtered by your-best-entry zones, 🎯 branch</p>
+      <div class="ring">
+        <canvas id="ring" width="264" height="264"></canvas>
+        <div class="inner"><b id="wrStrong">—</b><small>win rate</small></div>
+      </div>
+      <p class="hint" style="text-align:center">vs <b id="wrAll" style="color:var(--tx)">—</b> on all signals, honestly side by side</p>
+    </div>
+    <div class="card c4">
+      <h3>Cumulative signal PnL</h3>
+      <p class="hint">sums of closed outcomes, %</p>
+      <div class="statnum"><span id="pnlAll">—</span><small>%</small></div>
+      <div class="spark" id="spark"></div>
+    </div>
+    <div class="card c4">
+      <h3>Signals closed</h3>
+      <p class="hint">logged automatically, can't be edited</p>
+      <div class="statnum" id="nAll" style="margin:14px 0 6px">—</div>
+      <p class="hint" id="trackNote">Every outcome lands here the moment a signal closes.</p>
+    </div>
+    <div class="card c8">
+      <h3>Live neural activity</h3>
+      <p class="hint">real scanner events — wins, losses, learnings</p>
+      <div class="pulsefeed" id="pulseFeed"></div>
+    </div>
+    <div class="card c4">
+      <h3>Latest outcomes</h3>
+      <table id="last"></table>
+      <a href="#pricing" style="font-size:12px;color:var(--ok);text-decoration:none">Get these signals in real time →</a>
+    </div>
+  </section>
+
+  <h2 id="features">Built to stop the bleeding</h2>
+  <p class="sub2">Not another "signal group". A system that studies why you lose and pipes only what survives.</p>
+  <section class="feat">
+    <div class="card"><div class="ic">🔍</div><h3>Self-learning scanner</h3><p>13 coins × 20+ strategies × live orderflow. Weak coin×strategy combos get throttled automatically, reviewed by the AI curator, re-tested after 72h. The market changes — the filter follows.</p></div>
+    <div class="card"><div class="ic">🧬</div><h3>Your trading DNA</h3><p>Upload your exchange history (read-only key). We find the zones, hours and patterns where <b>you personally</b> lose — and gate signals through them. This alone saves most traders 10-30% of deposit.</p></div>
+    <div class="card"><div class="ic">🤖</div><h3>5 AI agents on demand</h3><p>Strategist, momentum, contrarian, macro and a risk officer debate the setup when you ask. You control the spend — AI never runs wild on your bill.</p></div>
+    <div class="card"><div class="ic">💵</div><h3>Exact position sizing</h3><p>Every signal ships with quantity, margin, $-risk and $-target for YOUR deposit and leverage. One wrong 20x liquidation costs more than months of access — sizing is the survival kit.</p></div>
+    <div class="card"><div class="ic">📊</div><h3>Backtest before trust</h3><p>Validate any strategy on any historical range first. If a tactic can't prove itself on data, it never reaches your screen.</p></div>
+    <div class="card"><div class="ic">🔬</div><h3>Quant research inside</h3><p>RSI/ATR/volume regimes, Kalman-style smoothing on noisy entries, MAE/MFE journey of every trade — the same math props pay quants for, distilled into readable cards.</p></div>
+    <div class="card"><div class="ic">🔒</div><h3>Read-only by design</h3><p>We accept only Read-Only exchange keys — validated at save. We can't touch your funds even if hacked; keys are encrypted AES-256 at rest.</p></div>
+  </section>
+
+  <h2 id="pricing">One price. Everything inside.</h2>
+  <p class="sub2">No tiers, no upsells, no "VIP channels".</p>
+  <section class="card price">
+    <div class="big">$100<small> / month</small></div>
+    <div class="inc">
+      <b>✓</b> Real-time scanner with self-learning filter<br>
+      <b>✓</b> Trading-DNA diagnostics of your own history<br>
+      <b>✓</b> 5 AI agents, strategist curator included<br>
+      <b>✓</b> Position sizing for your deposit & leverage<br>
+      <b>✓</b> Backtests on any date range · Telegram alerts<br>
+      <b>✓</b> Community + support in Telegram
+    </div>
+    <div class="anchor">⚠️ One carelessly sized 20x position can liquidate what protects a whole year of filtered signals. $100 is the cost of <b>one stop-loss</b>.</div>
+    <a class="btn" href="#" onclick="openAuth('signup');return false" style="font-size:16px;padding:15px 34px">Create account & pay with USDT</a>
+    <p class="micro" style="margin-top:14px">TRC20 or BEP20 · auto-activation in 1–2 min</p>
+  </section>
+
+  <h2 id="faq">FAQ</h2>
+  <section class="faq">
+    <details><summary>Is this financial advice?</summary><p>No. It's an analytics and education tool: scanner, statistics of your own trades and position-size math. Final decisions are always yours. Crypto futures are high-risk; never trade money you can't afford to lose.</p></details>
+    <details><summary>Do you need access to my funds?</summary><p>Never. Payment goes from your wallet directly to the project's public address. If you connect an exchange key for the DNA feature, it must be Read-Only — we validate and reject anything with trade/withdraw rights.</p></details>
+    <details><summary>How does the track record stay honest?</summary><p>Outcomes are appended automatically when each signal closes; entries cannot be edited or deleted by anyone. We show the "all signals" stats next to the filtered strong-zone branch so you can verify both.</p></details>
+    <details><summary>What's your refund/cancellation policy?</summary><p>Access runs 30 days from payment; it doesn't auto-renew. Want next month — pay again. No stored cards, no surprise charges, no cancellation gymnastics.</p></details>
+    <details><summary>Which exchanges are supported?</summary><p>Scanner signals are built from Bybit spot/futures data — tradeable on any major exchange. The DNA feature reads Bybit histories (OKX/Binance readers are on the roadmap).</p></details>
+  </section>
+
+  <footer>
+    <b>Risk disclosure.</b> This software is an analytical/educational tool, not financial advice, not asset management. Crypto futures trading carries extreme risk of loss; past performance never guarantees future results. By subscribing you accept full responsibility for your trading decisions. 18+.
+    <br><br><span id="brandFoot">TradeVision</span> · <span id="tgFoot"></span> · <span id="year"></span>
+  </footer>
+</div>
+
+<!-- auth modal -->
+<div class="modal" id="authModal">
+  <div class="card">
+    <h3 id="authTitle" style="font-size:19px;margin-bottom:12px">Create account</h3>
+    <input id="email" type="email" placeholder="Email">
+    <input id="pass" type="password" placeholder="Password (6+ chars)">
+    <p class="err" id="authErr"></p>
+    <button class="btn" style="width:100%;padding:13px" onclick="doAuth()" id="authBtn">Sign up</button>
+    <p style="font-size:12px;color:var(--mut);margin-top:12px;text-align:center">
+      <a href="#" onclick="openAuth(window.MODE==='signup'?'login':'signup');return false" style="color:var(--acc)" id="modeLink">Already registered? Log in</a>
+      · <a href="#" onclick="closeAuth();return false">close</a></p>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);window.MODE='signup';
+/* ---------- data ---------- */
+let TRACK=null;
+async function boot(){
+  $('year').textContent=new Date().getFullYear();
+  const me=await fetch('/api/auth/me').then(r=>r.ok?r.json():null).catch(()=>null);
+  if(me&&me.sub_active)location='/';
+  const h=await fetch('/api/health').then(r=>r.ok?r.json():null).catch(()=>null);
+  const brand=(me&&me.brand)||(h&&h.brand);const tg=(me&&me.telegram)||(h&&h.telegram);
+  if(brand){$('brand').textContent=brand;$('brandFoot').textContent=brand;document.title=brand+' — AI Trading Coach';}
+  if(tg)$('tgFoot').innerHTML=`<a href="${tg}" style="color:#5b665f">Telegram</a>`;
+  try{
+    TRACK=await (await fetch('/api/public/track')).json();
+    fill();
+  }catch(e){}
+}
+function fill(){
+  const t=TRACK;if(!t)return;
+  $('wrAll').textContent=t.all.winrate+'%';
+  $('wrStrong').textContent=t.strong.winrate+'%';
+  $('nAll').textContent=t.all.n;
+  $('pnlAll').textContent=(t.all.total_pnl_pct>0?'+':'')+t.all.total_pnl_pct;
+  $('trackNote').textContent=t.note;
+  // ring
+  const c=$('ring').getContext('2d'),p=(t.strong.winrate||0)/100,cx=132,cy=132,r=112;
+  c.lineWidth=18;c.lineCap='round';
+  c.strokeStyle='rgba(255,255,255,.08)';c.beginPath();c.arc(cx,cy,r,0,7);c.stroke();
+  c.strokeStyle='#9dffc9';c.shadowColor='#5ee6a8';c.shadowBlur=22;
+  c.beginPath();c.arc(cx,cy,r,-Math.PI/2,-Math.PI/2+p*2*Math.PI);c.stroke();
+  // spark
+  const mx=Math.max(...t.equity.map(Math.abs),1);
+  $('spark').innerHTML=t.equity.map(v=>`<i style="height:${2+72*Math.abs(v)/mx}px;opacity:${v<0?.3:1}"></i>`).join('');
+  // last table
+  $('last').innerHTML=t.last.slice(0,7).map(e=>`<tr><td>${e.day}</td><td>${e.symbol||''}</td><td>${e.side||''}</td><td class="${e.result==='WIN'?'w':'l'}">${e.result==='WIN'?'✅':'❌'} ${e.pnl_pct}%</td></tr>`).join('');
+  // pulse feed (симуляция живого потока из последних исходов)
+  const items=t.last.slice(0,12).map(e=>({t:e.day,html:e.result==='WIN'
+    ?`<b>${e.symbol}</b> ${e.side} closed <span class="w">✅ +${e.pnl_pct}%</span> ${e.strong?'· 🎯 strong zone':''}`
+    :`<b>${e.symbol}</b> ${e.side} stopped <span class="l">❌ ${e.pnl_pct}%</span>${e.strong?'':'· combo tightened ↓'}`}));
+  let i=0;
+  const push=()=>{if(!items.length)return;$('pulseFeed').innerHTML=items.slice(0,i+1).map(x=>`<div>${x.t} — ${x.html}</div>`).join('');i=(i+1)%Math.min(8,items.length);};
+  push();setInterval(push,2600);
+  // agent task chips у мозга (из реальных исходов)
+  const AC=['#4da3ff','#ff6b7a','#b892ff','#5ee6a8','#ffd278'];
+  const AZN=['STRATEGIST','MOMENTUM','CONTRARIAN','MACRO','RISK OFFICER'];
+  const ATX=t.last.slice(0,5).map((e,i)=>({
+    zone:'AGENT-0'+(i+1)+' · '+AZN[i%5],col:AC[i%5],
+    task:(e.result==='WIN'?'Holding '+e.symbol+' '+e.side+' bias':'Cutting '+e.symbol+' '+e.side+' exposure'),
+    st:e.result==='WIN'?'✓ complete':'⏳ '+e.pnl_pct+'%' ,cls:e.result==='WIN'?'st-complete':'st-run'}));
+  const AP=[{top:'2%',left:'2%'},{top:'24%',right:'0%'},{top:'48%',left:'0%'},{top:'70%',right:'3%'},{bottom:'2%',left:'8%'}];
+  $('agentChips').innerHTML=ATX.map((a,i)=>{
+    const p=AP[i];const pos=Object.entries(p).map(([k,v])=>k+':'+v).join(';');
+    return `<div class="achip" style="${pos};--ac:${a.col};animation-delay:${i*.9}s">
+      <span class="zone" style="color:${a.col}">${a.zone}</span><b>${a.task}</b><span class="${a.cls}">${a.st}</span></div>`;}).join('');
+  // hero chips
+  const chips=t.last.slice(0,4);
+  const pos=[{top:'8%',right:'4%'},{top:'34%',right:'14%'},{top:'60%',right:'2%'},{top:'86%',right:'18%'}];
+  $('heroChips').innerHTML=chips.map((e,j)=>`<div class="hchip" style="top:${pos[j].top};right:${pos[j].right};animation-delay:${j*1.3}s">
+    ${e.symbol} ${e.side}<b class="${e.result==='WIN'?'w':'l'}">${e.result==='WIN'?'✅':'❌'} ${e.pnl_pct}%</b></div>`).join('');
+}
+/* ---------- auth ---------- */
+function openAuth(m){window.MODE=m;$('authModal').classList.add('on');
+  $('authTitle').textContent=m==='signup'?'Create account':'Welcome back';
+  $('authBtn').textContent=m==='signup'?'Sign up ↗':'Log in ↗';
+  $('modeLink').textContent=m==='signup'?'Already registered? Log in':'No account yet? Sign up';
+  setTimeout(()=>$('email').focus(),50);}
+function closeAuth(){$('authModal').classList.remove('on');}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeAuth();});
+$('authModal').addEventListener('click',e=>{if(e.target.id==='authModal')closeAuth();});
+async function doAuth(){
+  $('authErr').textContent='';
+  const r=await fetch('/api/auth/'+(window.MODE==='signup'?'register':'login'),{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({email:$('email').value,password:$('pass').value})});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){$('authErr').textContent=d.detail||'something went wrong';return;}
+  location='/pay.html';
+}
+/* ---------- agent-brain (hero right): 5 цветных кластеров-ролей ---------- */
+(function(){
+  const bc=$('brain');if(!bc)return;const bctx=bc.getContext('2d');
+  const COLORS=['#4da3ff','#ff6b7a','#b892ff','#5ee6a8','#ffd278'];
+  const ZONES=['STRATEGIST','MOMENTUM','CONTRARIAN','MACRO','RISK OFFICER'];
+  const C=[{x:.5,y:.32,rx:.30,ry:.22},{x:.26,y:.55,rx:.20,ry:.18},
+           {x:.74,y:.55,rx:.20,ry:.18},{x:.38,y:.80,rx:.18,ry:.15},{x:.62,y:.80,rx:.18,ry:.15}];
+  let BW,BH,NB=[],PB=[],T0=performance.now();
+  function rsb(){const r=bc.getBoundingClientRect();BW=bc.width=r.width*2;BH=bc.height=r.height*2;
+    NB=[];C.forEach((c,ci)=>{const cx=c.x*BW,cy=c.y*BH,rx=c.rx*BW,ry=c.ry*BH;
+      for(let i=0;i<16;i++){const a=Math.random()*7,r2=Math.sqrt(Math.random());
+        NB.push({c:ci,x:cx+Math.cos(a)*r2*rx*.9,y:cy+Math.sin(a)*r2*ry*.9,
+          vx:(Math.random()-.5)*.22,vy:(Math.random()-.5)*.22,s:1.5+Math.random()*3,
+          cx,cy,rx,ry});}});}
+  function brainLinks(){const L=[];for(let i=0;i<NB.length;i++)for(let j=i+1;j<NB.length;j++){
+    const a=NB[i],b=NB[j],dx=a.x-b.x,dy=a.y-b.y,d=dx*dx+dy*dy;
+    const R=a.c===b.c?105:150;if(d<R*R*2.2)L.push([i,j,d,a.c===b.c]);}return L;}
+  rsb();addEventListener('resize',rsb);
+  window.BRAIN_COLORS=COLORS;window.BRAIN_ZONES=ZONES;
+  (function loop(){
+    bctx.clearRect(0,0,BW,BH);
+    const t=(performance.now()-T0)/1000;
+    // мягкие «тела» кластеров
+    C.forEach((c,ci)=>{const g=bctx.createRadialGradient(c.x*BW,c.y*BH,10,c.x*BW,c.y*BH,c.rx*BW*1.15);
+      g.addColorStop(0,COLORS[ci]+'14');g.addColorStop(1,'transparent');
+      bctx.fillStyle=g;bctx.beginPath();bctx.ellipse(c.x*BW,c.y*BH,c.rx*BW*1.15,c.ry*BH*1.15,0,0,7);bctx.fill();});
+    NB.forEach(n=>{n.x+=n.vx;n.y+=n.vy;
+      const dx=(n.x-n.cx)/(n.rx*.9),dy=(n.y-n.cy)/(n.ry*.9);
+      if(dx*dx+dy*dy>1){n.vx-=(n.x-n.cx)*.0006;n.vy-=(n.y-n.cy)*.0006;}});
+    const L=brainLinks();
+    if(Math.random()<.25&&L.length)PB.push({l:L[Math.floor(Math.random()*L.length)],p:0});
+    L.forEach(([i,j,d,intra])=>{const a=NB[i],b=NB[j];
+      bctx.strokeStyle=COLORS[a.c]+(intra?'30':'18');
+      bctx.beginPath();bctx.moveTo(a.x,a.y);bctx.lineTo(b.x,b.y);bctx.stroke();});
+    PB=PB.filter(p=>p.p<=1);
+    PB.forEach(pu=>{pu.p+=.022;const[i,j]=pu.l;const a=NB[i],b=NB[j];
+      const x=a.x+(b.x-a.x)*pu.p,y=a.y+(b.y-a.y)*pu.p;
+      bctx.fillStyle=COLORS[a.c];bctx.shadowColor=COLORS[a.c];bctx.shadowBlur=14;
+      bctx.beginPath();bctx.arc(x,y,3.4,0,7);bctx.fill();bctx.shadowBlur=0;});
+    NB.forEach(n=>{const puls=.75+.25*Math.sin(t*2.2+n.c*1.7+n.x*.01);
+      bctx.fillStyle=COLORS[n.c];bctx.globalAlpha=.5+.4*puls;
+      bctx.beginPath();bctx.arc(n.x,n.y,n.s*puls*1.6,0,7);bctx.fill();bctx.globalAlpha=1;});
+    // подписи зон как в видео-референсе
+    C.forEach((c,ci)=>{const fire=(0.4+0.5*Math.abs(Math.sin(t*.9+ci*2))).toFixed(1);
+      bctx.fillStyle=COLORS[ci];bctx.font=`700 ${11*2}px Inter,system-ui`;bctx.textAlign='center';
+      bctx.globalAlpha=.95;
+      bctx.fillText(ZONES[ci],c.x*BW,c.y*BH-c.ry*BH-14);
+      bctx.fillStyle='rgba(255,255,255,.45)';bctx.font=`500 ${9*2}px Inter,system-ui`;
+      bctx.fillText(`${14+ci*7} neurons · firing ${fire}s`,c.x*BW,c.y*BH-c.ry*BH+4);
+      bctx.globalAlpha=1;});
+    requestAnimationFrame(loop);
+  })();
+})();
+
+/* ---------- neural background: pulsing network ---------- */
+const cv=$('neuro'),cx2=cv.getContext('2d');let W,H,N=[],PULSES=[];
+function rs(){W=cv.width=innerWidth;H=cv.height=innerHeight;
+  N=Array.from({length:64},()=>({x:Math.random()*W,y:Math.random()*H,
+    vx:(Math.random()-.5)*.25,vy:(Math.random()-.5)*.25,r:1+Math.random()*2.2}));
+  PULSES=[];}rs();addEventListener('resize',rs);
+function links(){const L=[];for(let i=0;i<N.length;i++)for(let j=i+1;j<N.length;j++){
+  const dx=N[i].x-N[j].x,dy=N[i].y-N[j].y,d=dx*dx+dy*dy;if(d<170*170)L.push([i,j,d]);}return L;}
+(function loop(){
+  cx2.clearRect(0,0,W,H);
+  N.forEach(n=>{n.x+=n.vx;n.y+=n.vy;if(n.x<0||n.x>W)n.vx*=-1;if(n.y<0||n.y>H)n.vy*=-1;});
+  const L=links();
+  if(Math.random()<.12&&L.length)PULSES.push({l:L[Math.floor(Math.random()*L.length)],p:0});
+  L.forEach(([i,j,d])=>{cx2.strokeStyle=`rgba(157,255,201,${(1-d/28900)*.10})`;
+    cx2.beginPath();cx2.moveTo(N[i].x,N[i].y);cx2.lineTo(N[j].x,N[j].y);cx2.stroke();});
+  PULSES=PULSES.filter(p=>p.p<=1);
+  PULSES.forEach(pu=>{pu.p+=.028;const[a,b]=pu.l;
+    const x=N[a].x+(N[b].x-N[a].x)*pu.p,y=N[a].y+(N[b].y-N[a].y)*pu.p;
+    cx2.fillStyle='rgba(157,255,201,.9)';cx2.shadowColor='#5ee6a8';cx2.shadowBlur=12;
+    cx2.beginPath();cx2.arc(x,y,2.2,0,7);cx2.fill();cx2.shadowBlur=0;});
+  N.forEach(n=>{cx2.fillStyle='rgba(200,255,225,.5)';cx2.beginPath();cx2.arc(n.x,n.y,n.r,0,7);cx2.fill();});
+  requestAnimationFrame(loop);
+})();
+boot();
+</script>
+</body>
+</html>

@@ -1,83 +1,381 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TradingAgents - Matrix Interface</title>
-    <link rel="stylesheet" href="css/matrix-style.css">
+    <title>TradingAgents — Мультиагентная платформа дэйтрейдинга</title>
+    <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-    <!-- Header -->
-    <header class="header">
-        <div class="ticker-bar">
-            <span class="live-indicator">🔴 LIVE</span>
-            <span id="ticker-data">Loading market data...</span>
-            <span class="phi">φ = 1.618033988...</span>
-        </div>
-    </header>
 
-    <!-- Main Container -->
-    <div class="container">
-        <!-- Left Panel: Hot Coins -->
-        <aside class="left-panel">
-            <h2>🔥 HOT COINS</h2>
-            <div class="filters">
-                <label><input type="checkbox" checked> Vol > $10M</label>
-                <label><input type="checkbox" checked> Change > 2%</label>
+<header class="topbar">
+    <div class="brand">
+        <div class="logo">◈</div>
+        <div>
+            <span class="brand-name">TradingAgents</span>
+            <span class="brand-sub">multi-agent daytrading</span>
+        </div>
+    </div>
+    <nav class="nav" id="nav">
+        <button class="nav-btn active" data-tab="dashboard">Дашборд</button>
+        <button class="nav-btn" data-tab="coin">🎯 Монета</button>
+        <button class="nav-btn" data-tab="strategies">Стратегии</button>
+        <button class="nav-btn" data-tab="backtest">Бэктест</button>
+        <button class="nav-btn" data-tab="live">Live-сигналы</button>
+        <button class="nav-btn" data-tab="assistant">🧑‍💻 Ассистент</button>
+        <button class="nav-btn" data-tab="settings">Настройки</button>
+    </nav>
+    <div class="status-group">
+        <span id="data-badge" class="badge data-src" title="Источник рыночных данных">данные…</span>
+        <span id="conn-status" class="conn-status offline"><span class="dot"></span>офлайн</span>
+        <span id="demo-badge" class="badge" title="DEMO = ИИ-агенты без API-ключа (торговые сигналы при этом считаются индикаторами и работают всегда)">AI DEMO</span>
+    </div>
+</header>
+
+<!-- ============ DASHBOARD ============ -->
+<section class="panel active" id="panel-dashboard">
+    <div class="dash-grid">
+        <aside class="card coins-card">
+            <div class="card-head">
+                <h2>🔥 Горячие монеты</h2>
+                <button id="refresh-tickers" class="btn btn-ghost btn-sm">⟳</button>
             </div>
-            <div id="coins-list" class="coins-list">
-                <div class="coin-item">
-                    <div class="coin-name">LOADING...</div>
-                    <div class="coin-stats">Scanning market...</div>
-                </div>
-            </div>
+            <div class="card-body" id="coins-list"><div class="empty">Загрузка…</div></div>
         </aside>
 
-        <!-- Center Panel: TradingView Chart -->
-        <main class="center-panel">
+        <main class="card chart-card">
+            <div class="chart-toolbar">
+                <select id="chart-symbol" class="symbol-select"></select>
+                <div class="tf-group" id="tf-group"></div>
+                <div class="tf-group" id="chart-mode-group" style="margin-left:6px">
+                    <button id="candles-toggle" class="tf-btn active">🕯 Свечи</button>
+                    <button id="tv-toggle" class="tf-btn">📺 TradingView</button>
+                </div>
+                <div class="spacer"></div>
+                <span id="chart-data-src" class="badge data-src" title="Источник данных графика">—</span>
+                <button id="analyze-btn" class="btn btn-primary">🤖 Анализ агентов</button>
+            </div>
             <div id="tradingview-chart"></div>
+            <div id="chart-fallback" class="chart-fallback">
+                <canvas id="candles-canvas"></canvas>
+            </div>
         </main>
 
-        <!-- Right Panel: Agents Log -->
-        <aside class="right-panel">
-            <h2>🤖 AGENTS LOG</h2>
-            <div id="agents-log" class="agents-log"></div>
+        <aside class="card log-card">
+            <div class="card-head"><h2>🤖 Журнал агентов</h2></div>
+            <div class="card-body log-body" id="agents-log">
+                <div class="empty">Ожидание событий…</div>
+            </div>
         </aside>
     </div>
 
-    <!-- Footer: Agents Status -->
-    <footer class="footer">
-        <div class="agents-status">
-            <div class="agent" data-agent="scanner">
-                <span class="agent-icon">⚡</span>
-                <span class="agent-name">Scanner</span>
-                <span class="agent-status">ACTIVE</span>
+    <!-- Консенсус-панель с деревом размышлений -->
+    <div class="consensus-row">
+        <div class="card consensus-card">
+            <div class="card-head">
+                <h2>🧠 Дерево размышлений агентов</h2>
+                <span id="consensus-symbol" class="muted"></span>
             </div>
-            <div class="agent" data-agent="gpt6">
-                <span class="agent-icon">🧠</span>
-                <span class="agent-name">GPT-6</span>
-                <span class="agent-status">STANDBY</span>
-            </div>
-            <div class="agent" data-agent="grok">
-                <span class="agent-icon">🦅</span>
-                <span class="agent-name">Grok</span>
-                <span class="agent-status">STANDBY</span>
-            </div>
-            <div class="agent" data-agent="gemini">
-                <span class="agent-icon">💎</span>
-                <span class="agent-name">Gemini</span>
-                <span class="agent-status">STANDBY</span>
-            </div>
-            <div class="agent" data-agent="claude">
-                <span class="agent-icon">🛡️</span>
-                <span class="agent-name">Claude</span>
-                <span class="agent-status">MONITORING</span>
+            <div class="card-body" id="consensus-body">
+                <div class="empty">Выберите монету и нажмите «Анализ агентов» —<br>здесь появятся ветки рассуждений каждой модели</div>
             </div>
         </div>
-    </footer>
+        <div class="card live-mini">
+            <div class="card-head"><h2>🟢 Последние сигналы</h2></div>
+            <div class="card-body" id="live-mini-list"><div class="empty">—</div></div>
+        </div>
+    </div>
+</section>
 
-    <!-- TradingView Widget Script -->
-    <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-    <script src="js/app.js"></script>
+<!-- ============ COIN: работа с одной монетой (Bybit) ============ -->
+<section class="panel" id="panel-coin">
+    <div class="dash-grid">
+        <aside class="card coins-card">
+            <div class="card-head">
+                <h2>🪙 Монеты Bybit</h2>
+                <button id="coin-refresh" class="btn btn-ghost btn-sm">⟳</button>
+            </div>
+            <div class="card-body">
+                <input type="text" id="coin-filter" class="filter-input" placeholder="Поиск: BTC, LSK…">
+                <div id="coin-alpha-list" class="coin-alpha"><div class="empty">Загрузка…</div></div>
+                <h3 class="sub-h" style="margin-top:12px">🧠 Агенты анализа</h3>
+                <div id="agent-toggles" class="agent-toggles"><div class="empty" style="font-size:12px">Загрузка…</div></div>
+            </div>
+        </aside>
+
+        <main class="card chart-card">
+            <div class="chart-toolbar">
+                <span id="coin-symbol-label" class="coin-label">—</span>
+                <div class="tf-group" id="coin-tf-group"></div>
+                <div class="spacer"></div>
+                <button id="coin-analyze-btn" class="btn btn-primary">🤖 Анализ агентов</button>
+            </div>
+            <div class="chart-fallback" style="display:flex">
+                <canvas id="coin-canvas"></canvas>
+            </div>
+        </main>
+
+        <aside class="card">
+            <div class="card-head">
+                <h2>🟢 Live 1-на-1</h2>
+                <span id="single-run-pill" class="pill neutral">выкл</span>
+            </div>
+            <div class="card-body">
+                <form id="single-form" class="form">
+                    <label>Стратегия
+                        <select id="sl-strategy">
+                            <option value="auto">⚡ Авто — лучшая для монеты</option>
+                        </select>
+                    </label>
+                    <div class="params-box">
+                        <label class="muted">Параметры стратегии (JSON, необязательно)</label>
+                        <textarea id="sl-params" rows="2" spellcheck="false">{}</textarea>
+                    </div>
+                    <div style="display:flex;gap:10px">
+                        <label style="flex:1">TP, % <input type="number" id="sl-tp" value="2.0" step="0.1" min="2"></label>
+                        <label style="flex:1">SL, % <input type="number" id="sl-sl" value="1.0" step="0.1" min="0.1"></label>
+                    </div>
+                    <div style="display:flex;gap:10px">
+                        <label style="flex:1">Макс. удержание, ч <input type="number" id="sl-hold" value="4" step="0.5" min="0.1" max="4"></label>
+                        <label style="flex:1">Сделок/день (≤30) <input type="number" id="sl-max-trades" value="10" min="1" max="30"></label>
+                    </div>
+                    <div style="display:flex;gap:10px">
+                        <label style="flex:1">Размер позиции, % <input type="number" id="sl-pos" value="10" min="1" max="100"></label>
+                        <label style="flex:1">ТФ сигналов
+                            <select id="sl-timeframe">
+                                <option>1m</option><option>3m</option><option selected>5m</option>
+                                <option>15m</option><option>30m</option><option>1h</option><option>4h</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" id="single-start" class="btn btn-primary" style="flex:1">▶ Старт по монете</button>
+                        <button type="button" id="single-apply" class="btn btn-ghost" style="flex:1">✔ Применить онлайн</button>
+                        <button type="button" id="single-stop" class="btn btn-ghost">■</button>
+                    </div>
+                </form>
+                <div id="single-last" class="muted" style="margin-top:8px;font-size:11px"></div>
+            </div>
+        </aside>
+    </div>
+
+    <div class="consensus-row">
+        <div class="card consensus-card">
+            <div class="card-head">
+                <h2>🧠 Анализ агентов по монете</h2>
+                <span id="coin-consensus-symbol" class="muted"></span>
+            </div>
+            <div class="card-body" id="coin-consensus-body">
+                <div class="empty">Выберите монету слева и нажмите «Анализ агентов»</div>
+            </div>
+        </div>
+        <div class="card live-mini">
+            <div class="card-head"><h2>⚡ Сигналы 1-на-1</h2></div>
+            <div class="card-body" id="single-signals-list"><div class="empty">—</div></div>
+        </div>
+    </div>
+</section>
+
+<!-- ============ STRATEGIES ============ -->
+<section class="panel" id="panel-strategies">
+    <div class="two-col">
+        <div class="card">
+            <div class="card-head"><h2>Встроенные стратегии</h2></div>
+            <div class="card-body" id="strategies-list"><div class="empty">Загрузка…</div></div>
+        </div>
+        <div class="card">
+            <div class="card-head"><h2>Редактор стратегии</h2></div>
+            <div class="card-body">
+                <form id="strategy-form" class="form">
+                    <label>Тип стратегии
+                        <select id="st-type" required></select>
+                    </label>
+                    <label>Take-Profit, % <input type="number" id="st-tp" value="2.0" step="0.1" min="2"></label>
+                    <label>Stop-Loss, % <input type="number" id="st-sl" value="1.0" step="0.1" min="0.1"></label>
+                    <label>Макс. удержание, часов <input type="number" id="st-hold" value="4" step="0.5" min="0.1"></label>
+                    <div class="params-box">
+                        <label class="muted">Параметры (JSON)</label>
+                        <textarea id="st-params" rows="5" spellcheck="false">{}</textarea>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Сохранить / перейти к бэктесту</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============ BACKTEST ============ -->
+<section class="panel" id="panel-backtest">
+    <div class="card">
+        <div class="card-head">
+            <h2>🎯 Оптимизация — найти лучшие стратегии под монету</h2>
+            <span class="muted">прогоняет все 23 стратегии и выбирает лучшие для live-сигналов</span>
+        </div>
+        <div class="card-body">
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+                <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--text-dim)">Символ
+                    <select id="opt-symbol" required></select>
+                </label>
+                <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--text-dim)">Таймфрейм
+                    <select id="opt-timeframe">
+                        <option>1m</option><option>3m</option><option selected>5m</option>
+                        <option>15m</option><option>30m</option><option>1h</option>
+                    </select>
+                </label>
+                <button id="optimize-btn" class="btn btn-primary">⚡ Подобрать лучшие стратегии</button>
+                <span class="muted" id="optimize-status"></span>
+            </div>
+            <div id="optimize-results" style="margin-top:14px"><div class="empty">Нажмите «Подобрать» — система прогонит все стратегии и покажет топ</div></div>
+        </div>
+    </div>
+    <div class="two-col">
+        <div class="card">
+            <div class="card-head"><h2>Параметры бэктеста</h2></div>
+            <div class="card-body">
+                <form id="backtest-form" class="form">
+                    <label>Символ <select id="bt-symbol" required></select></label>
+                    <label>Стратегия <select id="bt-strategy" required></select></label>
+                    <label>Таймфрейм
+                        <select id="bt-timeframe">
+                            <option>1m</option><option>3m</option><option selected>5m</option>
+                            <option>15m</option><option>30m</option><option>1h</option><option>4h</option>
+                        </select>
+                    </label>
+                    <div style="display:flex;gap:10px">
+                        <label style="flex:1">Период с (дата) <input type="date" id="bt-start"></label>
+                        <label style="flex:1">Период по (дата) <input type="date" id="bt-end"></label>
+                    </div>
+                    <p class="muted">Объём данных считается автоматически из периода и таймфрейма. Без дат — последние 24 часа.</p>
+                    <label>Take-Profit, % <input type="number" id="bt-tp" value="2.0" step="0.1" min="2"></label>
+                    <label>Stop-Loss, % <input type="number" id="bt-sl" value="1.0" step="0.1" min="0.1"></label>
+                    <label>Макс. удержание, ч <input type="number" id="bt-hold" value="4" step="0.5" min="0.1"></label>
+                    <div class="params-box">
+                        <label class="muted">Параметры стратегии (JSON)</label>
+                        <textarea id="bt-params" rows="4" spellcheck="false">{}</textarea>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary" style="flex:1">▶ Запустить бэктест</button>
+                        <button type="button" id="backtest-all-btn" class="btn btn-ghost" style="flex:1">⚡ Все 23 стратегии</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-head"><h2>Результаты</h2></div>
+            <div class="card-body" id="backtest-results">
+                <div class="empty">Запустите бэктест, чтобы увидеть метрики</div>
+            </div>
+        </div>
+    </div>
+    <div class="card">
+        <div class="card-head"><h2>📈 Как проходили сделки (график)</h2></div>
+        <div class="card-body"><canvas id="trades-canvas" height="300"></canvas></div>
+    </div>
+    <div class="card">
+        <div class="card-head"><h2>Кривая капитала (equity)</h2></div>
+        <div class="card-body"><canvas id="equity-canvas" height="220"></canvas></div>
+    </div>
+    <div class="card">
+        <div class="card-head"><h2>Сделки</h2></div>
+        <div class="card-body"><div id="trades-table" class="table-wrap"><div class="empty">—</div></div></div>
+    </div>
+</section>
+
+<!-- ============ LIVE ============ -->
+<section class="panel" id="panel-live">
+    <div class="stat-row" id="live-stats"></div>
+    <div class="two-col">
+        <div class="card">
+            <div class="card-head"><h2>🟢 Активные сигналы</h2></div>
+            <div class="card-body" id="active-signals"><div class="empty">—</div></div>
+        </div>
+        <div class="card">
+            <div class="card-head"><h2>История сигналов</h2></div>
+            <div class="card-body table-wrap" id="signal-history"><div class="empty">—</div></div>
+        </div>
+    </div>
+    <div class="card">
+        <div class="card-head"><h2>Правила торговли</h2></div>
+        <div class="card-body rules-grid" id="rules-grid"></div>
+    </div>
+</section>
+
+<!-- ============ ASSISTANT (кодовый агент) ============ -->
+<section class="panel" id="panel-assistant">
+    <div class="two-col">
+        <div class="card">
+            <div class="card-head"><h2>🧑‍💻 Кодовый ассистент</h2></div>
+            <div class="card-body">
+                <form id="assistant-form" class="form">
+                    <label>Что сделать?
+                        <textarea id="as-request" rows="4" placeholder="Например: добавь стратегию на пересечении EMA 5 и EMA 20 с фильтром RSI..."></textarea>
+                    </label>
+                    <label>Тип задачи
+                        <select id="as-task">
+                            <option value="strategy">Новая стратегия (Python)</option>
+                            <option value="ui">Правка интерфейса (HTML/CSS/JS)</option>
+                            <option value="general">Другое / вопрос по коду</option>
+                        </select>
+                    </label>
+                    <label>Какой моделью писать код?
+                        <select id="as-role"></select>
+                    </label>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary btn-wide">⚡ Сгенерировать код</button>
+                    </div>
+                </form>
+                <div class="muted" style="margin-top:14px;line-height:1.6">
+                    <b>Как это работает:</b> вы описываете, что нужно — выбранная модель пишет
+                    готовый код. Вы просматриваете его и сохраняете в файл проекта.
+                    Примеры: «добавь стратегию: лонг при пробое 20-барового максимума»,
+                    «поменяй цвет кнопок на зелёный», «добавь в бэктест метрику X».
+                </div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-head">
+                <h2>Результат</h2>
+                <div class="spacer"></div>
+                <span id="as-meta" class="muted"></span>
+            </div>
+            <div class="card-body">
+                <div id="as-output" class="empty">Здесь появится сгенерированный код</div>
+            </div>
+        </div>
+    </div>
+    <div class="card">
+        <div class="card-head"><h2>💾 Сохранить в файл проекта</h2></div>
+        <div class="card-body">
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--text-dim);flex:1">Путь файла
+                    <input type="text" id="as-filename" placeholder="backend/strategies/my_strategy.py" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border-2);border-radius:8px;padding:8px 10px;font-family:var(--mono)">
+                </label>
+                <button id="as-save" class="btn btn-primary" style="margin-top:18px">💾 Сохранить</button>
+            </div>
+            <p class="muted" style="margin-top:8px">Файл сохраняется в папку проекта (только .py/.js/.css/.html/.md). Для новой стратегии сохраните в <b>backend/strategies/</b> и зарегистрируйте класс в реестре.</p>
+        </div>
+    </div>
+</section>
+
+<!-- ============ SETTINGS ============ -->
+<section class="panel" id="panel-settings">
+    <div class="card">
+        <div class="card-head">
+            <h2>⚙️ Ключи и модели</h2>
+            <div class="spacer"></div>
+            <button id="test-models-btn" class="btn btn-ghost btn-sm">🔌 Проверить все модели</button>
+            <button id="save-settings-btn" class="btn btn-primary btn-sm">💾 Сохранить</button>
+        </div>
+        <div class="card-body" id="settings-body"><div class="empty">Загрузка…</div></div>
+    </div>
+</section>
+
+<footer class="footer" id="agents-footer"></footer>
+
+<script src="js/api.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/app.js"></script>
 </body>
 </html>
