@@ -131,6 +131,10 @@ CREATE TABLE IF NOT EXISTS ledger (
 );
 CREATE INDEX IF NOT EXISTS idx_hits_code ON hits(code, created_ms);
 CREATE INDEX IF NOT EXISTS idx_ledger_code ON ledger(code, status);
+CREATE TABLE IF NOT EXISTS ai_usage (
+  user_id INTEGER NOT NULL, day TEXT NOT NULL, n INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(user_id, day)
+);
 """
 
 TRAFF_PG = """
@@ -155,6 +159,10 @@ CREATE TABLE IF NOT EXISTS ledger (
 );
 CREATE INDEX IF NOT EXISTS idx_hits_code ON hits(code, created_ms);
 CREATE INDEX IF NOT EXISTS idx_ledger_code ON ledger(code, status);
+CREATE TABLE IF NOT EXISTS ai_usage (
+  user_id BIGINT NOT NULL, day TEXT NOT NULL, n INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(user_id, day)
+);
 """
 
 

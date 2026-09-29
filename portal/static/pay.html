@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Activate access</title>
+<link rel="icon" type="image/png" href="/static/img/logo.png">
 <style>
 :root{color-scheme:dark;--acc:#4da3ff;--ok:#16c784;--bad:#ea3943;--tx:#e8eefc;--mut:#8b98b8;--card:rgba(16,24,48,.78)}
 *{box-sizing:border-box;margin:0;font-family:'Segoe UI',system-ui,Arial}
@@ -22,7 +23,7 @@ h1{font-size:24px;margin-bottom:6px}.mut{color:var(--mut);font-size:13px;line-he
 </head>
 <body>
 <div class="card">
-  <h1>Activate your 30-day access</h1>
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px"><img src="/static/img/logo.png" style="width:36px;height:36px;border-radius:50%;mix-blend-mode:screen" alt=""><h1 style="margin:0">Activate your 30-day access</h1></div>
   <p class="mut">Logged in as <b id="who">—</b> · price: <b id="price">$100</b>/month</p>
   <div style="margin:18px 0">
     <button class="btn" id="b-trc" onclick="invoice('trc20')">💎 Pay USDT via TRC20 (Tron)</button>

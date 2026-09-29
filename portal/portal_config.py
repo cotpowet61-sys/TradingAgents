@@ -112,6 +112,11 @@ class PortalSettings(BaseSettings):
     ADMIN_TG_ID: str = ""            # ваш числовой telegram id (кому слать оповещения)
     # Секрет подписи сессий. Если пуст — генерируется один раз и пишется в .env.
     AUTH_SECRET: str = ""            # env PORTAL_AUTH_SECRET
+    # Community-AI (SaaS): бесплатный провайдер для юзеров без своего ключа.
+    # OpenRouter совместим с OpenAI API; ":free" модели стоят $0.
+    FREE_AI_BASE_URL: str = "https://openrouter.ai/api/v1"
+    FREE_AI_KEY: str = ""            # ключ OpenRouter (серверный, НЕ в public)
+    FREE_AI_MODEL: str = "meta-llama/llama-3.3-70b-instruct:free"
 
     # Правила дэйтрейдинга (для отображения и контекста агентов)
     # 0 = без лимита (пользователь снял границу 30/день).

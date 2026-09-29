@@ -191,6 +191,9 @@ def mount(app, settings, static_dir: str) -> None:
             resp = await call_next(request)
         else:
             user = authn.user_by_token(request.cookies.get(authn.COOKIE))
+        if user:
+            import llm_client as _llm
+            _llm._SAAS_USER.set(user["id"])
             if not user:
                 if p in ("/", "/index.html", "/landing.html"):
                     resp = FileResponse(os.path.join(static_dir, "landing.html"))

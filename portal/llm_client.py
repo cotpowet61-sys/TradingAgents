@@ -20,6 +20,46 @@ def _role_cfg(role: str) -> dict:
     return settings.role_model(role)
 
 
+# ---------------------------------------------------------------------- #
+# Community-AI (SaaS): юзер без своего ключа ходит через бесплатный
+# OpenRouter-эндпоинт с дневной квотой. Юзер контекста ставит saas_gate.
+# ---------------------------------------------------------------------- #
+import contextvars
+_SAAS_USER: contextvars.ContextVar = contextvars.ContextVar("llm_free_user", default=None)
+
+FREE_AI_DAILY = 30
+
+
+def _q_day() -> str:
+    import time as _t
+    return _t.strftime("%Y-%m-%d", _t.gmtime())
+
+
+def quota_left(user_id: int) -> int:
+    """Сколько бесплатных запросов осталось сегодня."""
+    if not user_id:
+        return FREE_AI_DAILY
+    try:
+        import db as _db
+        r = _db.q("SELECT n FROM ai_usage WHERE user_id=? AND day=?", (user_id, _q_day()), one=True)
+        return max(0, FREE_AI_DAILY - (int(r["n"]) if r else 0))
+    except Exception:
+        return FREE_AI_DAILY
+
+
+def _quota_burn(user_id: int) -> None:
+    import db as _db
+    row = _db.q("SELECT n FROM ai_usage WHERE user_id=? AND day=?", (user_id, _q_day()), one=True)
+    if row:
+        _db.execute("UPDATE ai_usage SET n=n+1 WHERE user_id=? AND day=?", (user_id, _q_day()))
+    else:
+        _db.execute("INSERT INTO ai_usage(user_id, day, n) VALUES (?,?,1)", (user_id, _q_day()))
+
+
+def _free_cfg() -> bool:
+    return bool(getattr(settings, "FREE_AI_KEY", "") and getattr(settings, "FREE_AI_MODEL", ""))
+
+
 def has_key(role: str) -> bool:
     return bool(_role_cfg(role)["api_key"])
 
@@ -46,7 +86,19 @@ async def chat(role: str, messages: List[dict], *,
     """Один запрос chat/completions для роли. Бросает LLMError при проблемах."""
     cfg = _role_cfg(role)
     if not cfg["api_key"]:
-        raise LLMError(f"Нет API-ключа для роли {role} — введите в Настройках")
+        # Community-AI (SaaS): свой ключ отсутствует → бесплатный OpenRouter + квота
+        if _free_cfg() and getattr(settings, "SAAS_MODE", False):
+            ctx = _SAAS_USER.get()
+            left = quota_left(ctx or 0)
+            if left <= 0:
+                raise LLMError(f"Бесплатный лимит Community-AI исчерпан ({FREE_AI_DAILY}/день). "
+                               "Завтра снова доступен — или подключите свой ключ для безлимита.")
+            cfg = {"api_key": settings.FREE_AI_KEY,
+                   "base_url": (settings.FREE_AI_BASE_URL or "https://openrouter.ai/api/v1"),
+                   "model": settings.FREE_AI_MODEL}
+            cfg["_quota_burn"] = True
+        else:
+            raise LLMError(f"Нет API-ключа для роли {role} — введите в Настройках")
 
     base = cfg["base_url"].rstrip("/")
     body = {
@@ -58,6 +110,7 @@ async def chat(role: str, messages: List[dict], *,
     if json_mode:
         body["response_format"] = {"type": "json_object"}
 
+    ctx_burn_candidate = _SAAS_USER.get() if cfg.get("_quota_burn") else None
     headers = {"Authorization": f"Bearer {cfg['api_key']}"}
     try:
         async with httpx.AsyncClient(timeout=settings.AI_TIMEOUT) as cli:
@@ -65,6 +118,8 @@ async def chat(role: str, messages: List[dict], *,
             if r.status_code != 200:
                 raise LLMError(f"HTTP {r.status_code}: {r.text[:300]}")
             data = r.json()
+        if cfg.get("_quota_burn") and ctx_burn_candidate:
+            _quota_burn(ctx_burn_candidate)
         return data["choices"][0]["message"]["content"]
     except LLMError:
         raise

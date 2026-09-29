@@ -57,6 +57,9 @@ AI_API_KEY=
 # --- read-only ключи ВЛАДЕЛЬЦА для общего сканера (сигналы строятся из них) ---
 BYBIT_API_KEY=
 BYBIT_API_SECRET=
+FREE_AI_BASE_URL=https://openrouter.ai/api/v1
+FREE_AI_KEY=
+FREE_AI_MODEL=meta-llama/llama-3.3-70b-instruct:free
 ENV
   chmod 600 "$APP/portal/.env"
   echo "   !!! создан $APP/portal/.env — заполните значения"
