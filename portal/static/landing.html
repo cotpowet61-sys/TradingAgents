@@ -85,6 +85,12 @@ h2{font-size:clamp(28px,3.6vw,44px);font-weight:800;letter-spacing:-.03em;text-a
 .feat{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
 .feat .card p{color:var(--mut);font-size:13.5px;line-height:1.6;margin-top:8px}
 .feat .card .ic{font-size:26px}
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:24px 0 44px}
+.step{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px;position:relative;overflow:hidden}
+.step i{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;background:rgba(94,230,168,.12);border:1px solid rgba(94,230,168,.35);color:var(--ok);font-style:normal;font-weight:800;font-size:15px;margin-bottom:12px}
+.step h3{font-size:15.5px;font-weight:700;margin-bottom:8px}
+.step p{color:var(--mut);font-size:13px;line-height:1.6}
+@media(max-width:900px){.steps{grid-template-columns:1fr}}
 /* ---------- pricing ---------- */
 .price{max-width:520px;margin:0 auto;text-align:center;padding:36px}
 .price .big{font-size:64px;font-weight:800;letter-spacing:-.04em;color:var(--acc)}
@@ -120,7 +126,7 @@ footer{border-top:1px solid var(--line);margin-top:60px;padding:26px 0 40px;colo
     <div class="logo"><img src="/static/img/logo.png" alt=""><span id="brand">TradeVision</span></div>
     <div class="chips">
       <a href="#track">Track record</a><a href="#features">Features</a>
-      <a href="#pricing">Pricing</a><a href="#faq">FAQ</a>
+      <a href="#how">How it works</a><a href="#pricing">Pricing</a><a href="#faq">FAQ</a>
     </div>
     <a class="btn ghost" href="#" onclick="openAuth('login');return false">Log in</a>
     <a class="btn" href="#" onclick="openAuth('signup');return false">Create Account</a>
@@ -136,7 +142,7 @@ footer{border-top:1px solid var(--line);margin-top:60px;padding:26px 0 40px;colo
         <a class="btn" href="#" onclick="openAuth('signup');return false" style="font-size:16px;padding:15px 30px">Get instant access — $100/mo</a>
         <a class="btn ghost" href="#track">See the verified track ↓</a>
       </div>
-      <p class="micro">USDT (TRC20 / BEP20) · access activates automatically in 1–2 minutes · no card, no KYC · cancel anytime</p>
+      <p class="micro">USDT (TRC20 · Tron network) · access activates automatically in 1–2 minutes · no card, no KYC · cancel anytime</p>
     </div>
     <div class="brain-wrap">
       <div class="livechip">🔴 LIVE</div>
@@ -146,8 +152,8 @@ footer{border-top:1px solid var(--line);margin-top:60px;padding:26px 0 40px;colo
   </section>
 
   <div class="strip">
-    <span>⬡ Bybit</span><span>⬡ OKX</span><span>⬡ Binance</span><span>₮ USDT · TRC20</span>
-    <span>₮ USDT · BEP20</span><span>✈ Telegram alerts</span><span>🤖 5 AI agents</span>
+    <span>⬡ Bybit</span><span>⬡ OKX</span><span>⬡ Binance</span><span>₮ USDT · TRC20 · Trust Wallet ready</span>
+    <span>✈ Telegram alerts</span><span>🤖 5 AI agents</span>
   </div>
 
   <section class="bento" id="track">
@@ -196,6 +202,14 @@ footer{border-top:1px solid var(--line);margin-top:60px;padding:26px 0 40px;colo
     <div class="card"><div class="ic">🔒</div><h3>Read-only by design</h3><p>We accept only Read-Only exchange keys — validated at save. We can't touch your funds even if hacked; keys are encrypted AES-256 at rest.</p></div>
   </section>
 
+  <h2 id="how">How it works — your first 15 minutes</h2>
+  <p class="sub2">From zero to protected signals in three steps.</p>
+  <section class="steps">
+    <div class="step"><i>1</i><h3>Create account &amp; pay</h3><p>Sign up and pay $100 in USDT (TRC20) from Trust Wallet or any wallet. The network confirms the transaction — your cabinet unlocks automatically in about 1–2 minutes. No card, no KYC, no renewals — pay monthly, stop anytime.</p></div>
+    <div class="step"><i>2</i><h3>Connect your exchange (optional)</h3><p>Add a <b>Read-Only</b> Bybit API key — validation rejects anything with trade/withdraw rights. The coach autopsies your history and finds the zones, hours and patterns where <b>you personally</b> bleed money.</p></div>
+    <div class="step"><i>3</i><h3>Trade with a filter, not with hope</h3><p>Get live signals pre-checked against your DNA and the market regime — with exact deposit-sized entry, TP/SL and $-risk. Alerts land in Telegram; backtest any tactic on history before you trust a single dollar to it.</p></div>
+  </section>
+
   <h2 id="pricing">One price. Everything inside.</h2>
   <p class="sub2">No tiers, no upsells, no "VIP channels".</p>
   <section class="card price">
@@ -210,7 +224,7 @@ footer{border-top:1px solid var(--line);margin-top:60px;padding:26px 0 40px;colo
     </div>
     <div class="anchor">⚠️ One carelessly sized 20x position can liquidate what protects a whole year of filtered signals. $100 is the cost of <b>one stop-loss</b>.</div>
     <a class="btn" href="#" onclick="openAuth('signup');return false" style="font-size:16px;padding:15px 34px">Create account & pay with USDT</a>
-    <p class="micro" style="margin-top:14px">TRC20 or BEP20 · auto-activation in 1–2 min</p>
+    <p class="micro" style="margin-top:14px">USDT via TRC20 (Tron) · auto-activation in 1–2 min · works great from Trust Wallet</p>
   </section>
 
   <h2 id="faq">FAQ</h2>
