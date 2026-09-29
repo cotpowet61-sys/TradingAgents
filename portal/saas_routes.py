@@ -217,8 +217,6 @@ def mount(app, settings, static_dir: str) -> None:
                     resp = JSONResponse({"detail": "payment_required", "pay_url": "/pay.html"}, status_code=402)
                 else:
                     resp = RedirectResponse("/pay.html")
-            elif p == "/landing.html":
-                resp = RedirectResponse("/")
             elif p.startswith("/api/portfolio"):
                 # персональные данные — только с ключами самого юзера
                 enc = (user.get("user_keys_enc") or "").strip()

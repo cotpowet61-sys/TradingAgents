@@ -63,6 +63,22 @@ async def _shutdown():
 # ---------------------------------------------------------------------- #
 @app.get("/")
 async def index():
+    """Главная = лендинг (мозг/маркетинг); терминал вынесен на /app."""
+    return FileResponse(os.path.join(STATIC_DIR, "landing.html"))
+
+
+@app.get("/app")
+async def terminal():
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+
+@app.get("/landing.html", include_in_schema=False)
+async def landing_page():
+    return FileResponse(os.path.join(STATIC_DIR, "landing.html"))
+
+
+@app.get("/index.html", include_in_schema=False)
+async def index_page():
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
 
