@@ -115,6 +115,25 @@ async def on_message(msg: dict) -> None:
                 text="Команды: /start — о платформе · /stat — статистика партнёра · /link — моя ссылка.")
 
 
+async def _daily_digest() -> None:
+    """09:00 UTC: владельцам сводка суток — продажи/клики/активные подписки."""
+    admin = (settings.ADMIN_TG_ID or "").strip()
+    if not admin:
+        return
+    day_ago = int(time.time() * MS) - 86400 * MS
+    pays = _db.q("SELECT COUNT(*) n, COALESCE(SUM(amount),0) s FROM paid_tx WHERE ms>=?", (day_ago,), one=True)
+    subs = _db.q("SELECT COUNT(*) n FROM users WHERE sub_until_ms>?", (int(time.time() * MS),), one=True)["n"]
+    clicks = _db.q("SELECT COUNT(*) n FROM hits WHERE created_ms>=?", (day_ago,), one=True)["n"]
+    regs = _db.q("SELECT COUNT(*) n FROM users WHERE created_ms>=?", (day_ago,), one=True)["n"]
+    users = _db.q("SELECT COUNT(*) n FROM users", one=True)["n"]
+    await _call("sendMessage", chat_id=admin,
+                text=("📊 Дайджест суток TradeVision\n"
+                      f"💰 Оплат за 24ч: {pays['n']} (+${float(pays['s']):.0f})\n"
+                      f"👥 Регистраций: +{regs} (всего {users})\n"
+                      f"✅ Активных подписок: {subs}\n"
+                      f"🖱 Кликов по партнёрским ссылкам: {clicks}"))
+
+
 async def main() -> None:
     if not TOKEN:
         log.error("TG_BOT_TOKEN пуст — задайте в portal/.env и перезапустите. Спим.")
@@ -123,8 +142,18 @@ async def main() -> None:
     me = await _call("getMe")
     log.info("бот запущен: %s", (me.get("result") or {}).get("username"))
     offset = 0
+    last_digest_day = ""
     while True:
         try:
+            # раз в сутки в 09:xx UTC — операционная сводка владельцам
+            now = time.gmtime()
+            day_key = time.strftime("%Y-%m-%d", now)
+            if now.tm_hour == 9 and day_key != last_digest_day:
+                last_digest_day = day_key
+                try:
+                    await _daily_digest()
+                except Exception as e:  # noqa: BLE001
+                    log.warning("digest error: %s", e)
             async with httpx.AsyncClient(timeout=40) as cli:
                 r = await cli.get(f"{API}/getUpdates", params={"offset": offset, "timeout": 30})
             for upd in (r.json().get("result") or []):

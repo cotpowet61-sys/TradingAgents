@@ -3,45 +3,92 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Activate access</title>
+<title>Account — TradeVision</title>
 <link rel="icon" type="image/png" href="/static/img/logo.png">
 <style>
-:root{color-scheme:dark;--acc:#4da3ff;--ok:#16c784;--bad:#ea3943;--tx:#e8eefc;--mut:#8b98b8;--card:rgba(16,24,48,.78)}
-*{box-sizing:border-box;margin:0;font-family:'Segoe UI',system-ui,Arial}
-body{background:radial-gradient(1000px 500px at 60% -10%,#12214a 0%,#070b16 55%);color:var(--tx);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
-.card{background:var(--card);border:1px solid rgba(90,130,255,.18);border-radius:16px;padding:26px;max-width:560px;width:100%}
-h1{font-size:24px;margin-bottom:6px}.mut{color:var(--mut);font-size:13px;line-height:1.6}
-.btn{background:linear-gradient(135deg,#3b82f6,#22d3ee);border:0;color:#04122b;font-weight:700;padding:12px 18px;border-radius:10px;cursor:pointer;font-size:14px;width:100%;margin-top:8px}
-.btn.ghost{background:transparent;border:1px solid #3a4a75;color:var(--tx)}
-.addr{font-family:Consolas,monospace;font-size:12px;background:#0a1128;border:1px solid #2b3a63;border-radius:10px;padding:11px;margin:8px 0;word-break:break-all}
-.amt{font-size:34px;font-weight:800;color:var(--acc)}
-.status{margin-top:14px;padding:11px;border-radius:10px;font-size:13px;display:none}
-.status.pending{display:block;background:rgba(77,163,255,.12);border:1px solid rgba(77,163,255,.3)}
-.status.ok{display:block;background:rgba(22,199,132,.12);border:1px solid rgba(22,199,132,.35)}
+:root{color-scheme:dark;--bg:#060707;--acc:#9dffc9;--ok:#5ee6a8;--bad:#ff6b7a;--tx:#f2f5f3;--mut:#9aa69f;--card:#101312;--line:rgba(255,255,255,.07)}
+*{box-sizing:border-box;margin:0;font-family:'Inter','SF Pro Display','Segoe UI',system-ui,Arial}
+body{background:var(--bg);color:var(--tx);min-height:100vh}
+.glow{position:fixed;border-radius:50%;filter:blur(120px);opacity:.28;z-index:-1;pointer-events:none;width:50vw;height:38vw;background:radial-gradient(circle,#c9ffe0,transparent 60%);top:-12%;right:-10%}
+.wrap{max-width:620px;margin:0 auto;padding:20px}
+nav{display:flex;align-items:center;gap:10px;padding:6px 0 18px}
+.logo{display:flex;align-items:center;gap:9px;font-weight:700}
+.logo img{width:32px;height:32px;border-radius:50%;mix-blend-mode:screen}
+.sp{flex:1}
+.btn{background:#fff;color:#060707;font-weight:700;border:0;padding:11px 18px;border-radius:999px;cursor:pointer;font-size:13.5px;text-decoration:none;display:inline-block}
+.btn.ghost{background:transparent;border:1px solid rgba(255,255,255,.16);color:var(--tx)}
+.btn.w{width:100%;text-align:center;padding:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:20px;margin-bottom:14px}
+h1{font-size:21px;margin-bottom:2px}
+mut, .mut{color:var(--mut);font-size:12.5px;line-height:1.6;display:block}
+.big{font-size:30px;font-weight:800;color:var(--acc)}
+.addr{font-family:Consolas,monospace;font-size:12px;background:#0a0d0c;border:1px solid var(--line);border-radius:10px;padding:11px;margin:8px 0;word-break:break-all}
+input{width:100%;margin:5px 0;padding:11px 12px;border-radius:11px;border:1px solid var(--line);background:#0a0d0c;color:var(--tx);font-size:13px}
+.pill{display:inline-block;padding:4px 12px;border-radius:999px;font-size:12px;font-weight:700}
+.pill.ok{background:rgba(94,230,168,.12);color:var(--ok);border:1px solid rgba(94,230,168,.3)}
+.pill.warn{background:rgba(255,210,120,.1);color:#ffd278;border:1px solid rgba(255,210,120,.3)}
 .pulse{animation:p 1.6s infinite}@keyframes p{50%{opacity:.55}}
+a{color:var(--acc)}
+.amt{font-size:28px;font-weight:800;color:var(--acc)}
 </style>
 </head>
 <body>
-<div class="card">
-  <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px"><img src="/static/img/logo.png" style="width:36px;height:36px;border-radius:50%;mix-blend-mode:screen" alt=""><h1 style="margin:0">Activate your 30-day access</h1></div>
-  <p class="mut">Logged in as <b id="who">—</b> · price: <b id="price">$100</b>/month</p>
-  <div style="margin:18px 0">
-    <button class="btn" id="b-trc" onclick="invoice('trc20')">💎 Pay USDT via TRC20 (Tron)</button>
-    <button class="btn ghost" id="b-bsc" onclick="invoice('bep20')">🟡 Pay USDT via BEP20 (BSC)</button>
+<div class="glow"></div>
+<div class="wrap">
+  <nav>
+    <div class="logo"><img src="/static/img/logo.png" alt=""><span id="brand">TradeVision</span></div>
+    <div class="sp"></div>
+    <a class="btn ghost" href="/" id="toApp" style="display:none">Open terminal →</a>
+    <button class="btn ghost" onclick="logout()">Log out</button>
+  </nav>
+
+  <!-- Доступ -->
+  <div class="card">
+    <h1 id="hTitle">Activate your 30-day access</h1>
+    <span class="mut">Logged in as <b id="who" style="color:var(--tx)">—</b> · <b id="price">$100</b>/month</span>
+    <div id="active" style="display:none;margin-top:10px">
+      <span class="pill ok" id="activePill">✅ active</span>
+      <div style="margin-top:10px"><span class="big" id="daysLeft">—</span> <span class="mut" style="display:inline">days left</span></div>
+    </div>
   </div>
-  <div id="inv" hidden>
-    <p class="mut">Send <b>EXACTLY</b> this amount (the cents identify your payment):</p>
-    <div class="amt" id="amt">— USDT</div>
-    <p class="mut">To address (<span id="net">—</span>):</p>
-    <div class="addr" id="addr">—</div>
-    <button class="btn ghost" onclick="copyAddr()">📋 Copy address</button>
-    <div class="status pending pulse" id="st">Waiting for on-chain confirmation… detected automatically in 1–2 min. Keep this page open.</div>
-    <div class="status ok" id="ok">✅ Payment received! Redirecting…</div>
-    <p class="mut" id="exp" style="margin-top:8px"></p>
+
+  <!-- Оплата (видна, если нет активной подписки или хочет продлить) -->
+  <div class="card" id="payCard">
+    <h1>Pay with USDT</h1>
+    <span class="mut">до <b id="price2">$100</b> · auto-activation in 1–2 min · no card, no KYC</span>
+    <div style="margin:14px 0 4px">
+      <button class="btn w" id="b-trc" onclick="invoice('trc20')">💎 Pay USDT via TRC20 (Tron)</button>
+      <div style="height:8px"></div>
+      <button class="btn ghost w" id="b-bsc" onclick="invoice('bep20')">🟡 Pay USDT via BEP20 (BSC)</button>
+    </div>
+    <div id="inv" hidden>
+      <span class="mut">Send <b>EXACTLY</b> this amount — the cents identify your payment:</span>
+      <div class="amt" id="amt">— USDT</div>
+      <span class="mut">To address (<span id="net">—</span>):</span>
+      <div class="addr" id="addr">—</div>
+      <button class="btn ghost w" onclick="copyAddr()">📋 Copy address</button>
+      <div style="margin-top:12px" class="card" id="stWrap">
+        <span class="pill warn pulse" id="stPill">⏳ waiting for confirmation…</span>
+        <span class="mut" style="margin-top:8px">Keep this page open. Detected automatically from the blockchain.</span>
+      </div>
+      <span class="mut" id="exp" style="margin-top:6px"></span>
+    </div>
   </div>
-  <div class="status ok" id="active" style="display:none"></div>
-  <p class="mut" style="margin-top:16px">Payment goes straight to the project wallet — your funds never touch our servers. Need help? <a href="#" id="tg" style="color:var(--acc)">Telegram support</a>.</p>
-  <button class="btn ghost" style="margin-top:12px" onclick="logout()">Log out</button>
+
+  <!-- Ключи Bybit (для ДНК) -->
+  <div class="card">
+    <h1>Trading-DNA: connect exchange</h1>
+    <span class="mut">We analyze <b>your real trade history</b> and throttle the setups where <b>you</b> lose. Keys must be <b>Read-Only</b> — anything with trade/withdraw rights is rejected automatically. Keys are encrypted AES-256 at rest.</span>
+    <div id="keysState" style="margin:12px 0"></div>
+    <input id="bk" placeholder="Bybit API Key (Read-Only)">
+    <input id="bs" type="password" placeholder="Bybit API Secret">
+    <div class="mut" id="kMsg" style="min-height:16px"></div>
+    <button class="btn w" onclick="saveKeys()">🔒 Save keys</button>
+    <span class="mut" style="margin-top:8px">How to create: Bybit → API Management → New key → check <b>Read-Only</b> only → save. <a href="https://www.bybit.com/app/user/api-management" target="_blank">open Bybit API page ↗</a></span>
+  </div>
+
+  <span class="mut" style="text-align:center">Payment goes straight to the project wallet — funds never touch our servers.
+    Need help? <a href="#" id="tg" target="_blank">Telegram support</a></span>
 </div>
 <script>
 const $=id=>document.getElementById(id);let ME=null,POLL=null;
@@ -49,34 +96,55 @@ async function boot(){
   const r=await fetch('/api/auth/me');
   if(!r.ok){location='/landing.html';return;}
   ME=await r.json();if(!ME.enabled){location='/';return;}
-  $('who').textContent=ME.email;$('price').textContent='$'+ME.price;
-  if(ME.telegram){const tg=document.getElementById('tg');tg.href=ME.telegram;tg.target='_blank';}
-  if(ME.brand)document.title='Activate access — '+ME.brand;
+  $('who').textContent=ME.email;$('price').textContent='$'+ME.price;$('price2').textContent='$'+ME.price;
+  if(ME.brand){$('brand').textContent=ME.brand;document.title='Account — '+ME.brand;}
+  if(ME.telegram){$('tg').href=ME.telegram;}
   if(ME.wallets&&ME.wallets.trc20==='')$('b-trc').style.display='none';
   if(ME.wallets&&ME.wallets.bep20==='')$('b-bsc').style.display='none';
-  if(ME.sub_active){$('active').style.display='block';
-    $('active').innerHTML=`✅ Access active — <b>${ME.days_left} days</b> left. <a href="/" style="color:var(--ok)">Open terminal →</a>`;}
+  if(ME.sub_active){
+    $('active').style.display='block';$('toApp').style.display='inline-block';
+    $('daysLeft').textContent=ME.days_left;$('hTitle').textContent='Your access';
+    $('payCard').querySelector('h1').textContent='Renew / extend';
+  }
+  keyState();
   const s=await(await fetch('/api/billing/status')).json();
-  if(s.invoice&&ME.wallets)render(s.invoice.network);
+  if(s.invoice&&ME.wallets)renderInv(s.invoice);
 }
+async function keyState(){
+  const k=await(await fetch('/api/user/bybit-keys')).json();
+  $('keysState').innerHTML=k.has_keys
+    ?'<span class="pill ok">🔒 keys saved (read-only)</span> <a href="#" onclick="delKeys();return false" style="font-size:12px;margin-left:8px">remove</a>'
+    :'<span class="pill warn">keys not connected</span>';
+}
+async function saveKeys(){
+  $('kMsg').textContent='Validating with Bybit…';
+  const r=await fetch('/api/user/bybit-keys',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({api_key:$('bk').value,api_secret:$('bs').value})});
+  const d=await r.json().catch(()=>({}));
+  $('kMsg').textContent=r.ok?'✅ Saved and encrypted.':('❌ '+(d.explain||d.detail||'failed'));
+  $('kMsg').style.color=r.ok?'var(--ok)':'var(--bad)';
+  if(r.ok){$('bk').value='';$('bs').value='';keyState();}
+}
+async function delKeys(){await fetch('/api/user/bybit-keys',{method:'DELETE'});keyState();}
 async function invoice(net){
   const r=await fetch('/api/billing/invoice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({network:net})});
   const d=await r.json().catch(()=>({}));
   if(!r.ok){alert(d.detail||'error');return;}
-  window._inv=d;render(net);
+  window._inv=d;renderInv(d);
 }
-function render(net){
-  const d=window._inv;if(!d)return;
-  $('inv').hidden=false;$('net').textContent=net.toUpperCase();
+function renderInv(d){
+  $('inv').hidden=false;$('net').textContent=d.network.toUpperCase();
   $('amt').textContent=d.amount.toFixed(2)+' USDT';
-  $('addr').textContent=(net==='trc20'?ME.wallets.trc20:ME.wallets.bep20)||d.address||'—';
+  $('addr').textContent=(d.network==='trc20'?ME.wallets.trc20:ME.wallets.bep20)||d.address||'—';
   $('exp').textContent='Invoice valid until '+new Date(d.expires_at).toLocaleString();
   if(!POLL)POLL=setInterval(poll,15000);poll();
 }
 async function poll(){
   const s=await(await fetch('/api/billing/status')).json();
-  if(s.sub_active){$('st').style.display='none';$('ok').style.display='block';
-    clearInterval(POLL);setTimeout(()=>location='/',2000);}
+  if(s.sub_active&&s.days_left>0){
+    $('stPill').textContent='✅ Payment received! Access active.';
+    $('stPill').className='pill ok';
+    clearInterval(POLL);setTimeout(()=>location='/',2200);}
 }
 function copyAddr(){navigator.clipboard.writeText($('addr').textContent);}
 async function logout(){await fetch('/api/auth/logout',{method:'POST'});location='/landing.html';}

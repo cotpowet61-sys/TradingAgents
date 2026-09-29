@@ -1281,6 +1281,14 @@ $('ntf-toasts').addEventListener('change', saveAllQuiet);
             const m = await me.json();
             if (m.enabled) {
                 if (!m.sub_active) { location = '/pay.html'; return; }
+                // кабинет (дни доступа/ключи Bybit) — быстрая ссылка из шапки
+                const acc = document.createElement('a');
+                acc.href = '/pay.html'; acc.className = 'btn'; acc.id = 'acc-btn';
+                acc.title = `Подписка: осталось ${m.days_left} дн. Кабинет: ключи Bybit, продление`;
+                acc.textContent = `👤 ${m.days_left}д`;
+                const gear = document.querySelector('.header-right, header .btn, .topbar');
+                (gear && gear.parentElement ? gear.parentElement : document.body).appendChild(acc);
+                acc.style.cssText = 'position:fixed;top:14px;right:96px;z-index:999;padding:7px 14px;font-size:13px;text-decoration:none';
             }
         } else if (me.status === 401) { location = '/landing.html'; return; }
     } catch (_) { /* сеть недоступна — продолжаем в обычном режиме */ }
