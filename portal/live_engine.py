@@ -296,6 +296,21 @@ class LiveEngine:
                         pass
                     if sig.confidence < min_conf:
                         return
+                    summ = ta.compute_feature_summary(candles) or {}
+                    # квант-фильтры качества сигналов (стоп-лист + сезонный объём),
+                    # калибруются по backtest_local.py; дефолты не режут выдачу
+                    try:
+                        bl = {x.strip() for x in (settings.STYPE_BLOCKLIST or "").split(",") if x.strip()}
+                        if stype in bl or f"{stype}:{sym}" in bl:
+                            return
+                        if settings.VOL_SEASON_GATE:
+                            vrs = (summ or {}).get("vol_ratio_seasonal")
+                            vst = {x.strip() for x in (settings.VOL_SEASON_STYPES or "").split(",") if x.strip()}
+                            if vrs is not None and vrs < float(settings.VOL_SEASON_MIN) \
+                                    and (not vst or stype in vst):
+                                return
+                    except Exception:
+                        pass
                     # персонализация под вашу историю (ДНК; 0 токенов)
                     fit = None
                     tp2, sl2, rr_free, risk_manual = sig.tp, sig.sl, False, False
@@ -304,7 +319,7 @@ class LiveEngine:
                     try:
                         from trade_context import fit_score, _regime, match_my_strategy
                         dna = self._fresh_dna()
-                        summ = ta.compute_feature_summary(candles) or {}
+                        summ = summ or {}
                         regime = _regime([c.close for c in candles])
                         fit = fit_score(dna, sym, sig.side.value,
                                         rsi=(summ or {}).get("rsi"), regime=regime)
@@ -326,8 +341,8 @@ class LiveEngine:
                             # Правило 2/1 снято → цели по волатильности графика (ATR)
                             atr_pct = (summ or {}).get("atr_pct") or 0.0
                             if atr_pct > 0 and e:
-                                tp_move = min(6.0, max(0.4, 2.0 * atr_pct))
-                                sl_move = min(4.0, max(0.25, 1.2 * atr_pct))
+                                tp_move = min(6.0, max(0.4, settings.ATR_TP_MULT * atr_pct))
+                                sl_move = min(4.0, max(0.25, settings.ATR_SL_MULT * atr_pct))
                                 if sig.side.value == "LONG":
                                     tp2 = e * (1 + tp_move / 100)
                                     sl2 = e * (1 - sl_move / 100)

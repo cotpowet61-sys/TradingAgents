@@ -94,6 +94,17 @@ class PortalSettings(BaseSettings):
     DEPOSIT_USD: float = 1000.0
     RISK_PER_TRADE_PCT: float = 3.0  # доля депозита, которой рискуем в одной сделке
     LEVERAGE: float = 20.0           # плечо при расчёте объёма/маржи
+    # ---- Квант-фильтры качества сигналов (по мотивам бэктест-харнесса) ----
+    # Множители ATR-режима целей (когда RR_BINDING выкл): TP = ATR%×mult, SL = ATR%×mult.
+    ATR_TP_MULT: float = 2.0
+    ATR_SL_MULT: float = 1.2
+    # Сезонный объёмный фильтр (Chen–Feng–Palomar: сезонная база точнее rolling-mean).
+    # Сигнал пропускаем, только если объём бара выше «нормы этого часа UTC».
+    VOL_SEASON_GATE: bool = False    # включаем после подтверждения бэктестом
+    VOL_SEASON_MIN: float = 1.0
+    VOL_SEASON_STYPES: str = ""      # пусто = все стратегии; иначе "momentum_breakout,rsi_swing"
+    # Стоп-лист стратегий (из отчёта бэктеста): \"stype\" или \"stype:SYMBOL\" через запятую.
+    STYPE_BLOCKLIST: str = ""
 
     # ------------------------------------------------------------------ #
     # SaaS (мульти-пользовательский режим продажи подписки)
@@ -208,6 +219,14 @@ class PortalSettings(BaseSettings):
                     "risk_per_trade_pct": self.RISK_PER_TRADE_PCT,
                     "leverage": self.LEVERAGE,
                 },
+                "quant_filters": {
+                    "atr_tp_mult": self.ATR_TP_MULT,
+                    "atr_sl_mult": self.ATR_SL_MULT,
+                    "vol_season_gate": self.VOL_SEASON_GATE,
+                    "vol_season_min": self.VOL_SEASON_MIN,
+                    "vol_season_stypes": self.VOL_SEASON_STYPES,
+                    "stype_blocklist": self.STYPE_BLOCKLIST,
+                },
             },
             "rules": {
                 "max_trades_per_day": self.MAX_TRADES_PER_DAY,
@@ -242,6 +261,12 @@ class PortalSettings(BaseSettings):
         "manual_hold_min": ("MANUAL_HOLD_MIN", "MANUAL_HOLD_MIN"),
         "deposit_usd": ("DEPOSIT_USD", "DEPOSIT_USD"),
         "risk_per_trade_pct": ("RISK_PER_TRADE_PCT", "RISK_PER_TRADE_PCT"),
+        "atr_tp_mult": ("ATR_TP_MULT", "ATR_TP_MULT"),
+        "atr_sl_mult": ("ATR_SL_MULT", "ATR_SL_MULT"),
+        "vol_season_gate": ("VOL_SEASON_GATE", "VOL_SEASON_GATE"),
+        "vol_season_min": ("VOL_SEASON_MIN", "VOL_SEASON_MIN"),
+        "vol_season_stypes": ("VOL_SEASON_STYPES", "VOL_SEASON_STYPES"),
+        "stype_blocklist": ("STYPE_BLOCKLIST", "STYPE_BLOCKLIST"),
         "leverage": ("LEVERAGE", "LEVERAGE"),
         "brand_name": ("BRAND_NAME", "BRAND_NAME"),
         "price_month_usd": ("PRICE_MONTH_USD", "PRICE_MONTH_USD"),

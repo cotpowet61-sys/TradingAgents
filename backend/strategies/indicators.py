@@ -349,6 +349,23 @@ def compute_feature_summary(candles: List[Candle]) -> dict:
     a = atr(h, l, c)
     vol_ma = sma(v, 20)
     vol_ratio = (v[-1] / vol_ma[-1]) if not np.isnan(vol_ma[-1]) and vol_ma[-1] else 1.0
+    # Сезонная база объёма по времени суток (идея Chen–Feng–Palomar, SSRN 2872537:
+    # внутридневной объём имеет устойчивый U-профиль, поэтому «норму» для текущего
+    # бара правильнее брать не как rolling-mean, а как медиану объёма баров того же
+    # часа UTC за доступную историю — такой baseline статистически точнее).
+    vol_ratio_seasonal = None
+    try:
+        n_c = len(candles)
+        if n_c >= 50:
+            cur_h = int((candles[-1].ts // 3_600_000) % 24)
+            idx = [k for k in range(max(0, n_c - 7 * 24 * 12), n_c - 1)
+                   if int((candles[k].ts // 3_600_000) % 24) == cur_h]
+            if len(idx) >= 5:
+                base = float(np.median(v[idx]))
+                if base > 0:
+                    vol_ratio_seasonal = round(float(v[-1] / base), 2)
+    except Exception:
+        vol_ratio_seasonal = None
     return {
         "price": round(float(last), 6),
         "change_pct": round(float(change), 2),
@@ -356,6 +373,7 @@ def compute_feature_summary(candles: List[Candle]) -> dict:
         "atr": round(float(a[-1]), 6) if not np.isnan(a[-1]) else None,
         "atr_pct": round(float(a[-1] / last * 100), 3) if last and not np.isnan(a[-1]) else None,
         "volume_ratio": round(float(vol_ratio), 2),
+        "vol_ratio_seasonal": vol_ratio_seasonal,
         "high": round(float(h[-1]), 6),
         "low": round(float(l[-1]), 6),
         "candles": len(candles),

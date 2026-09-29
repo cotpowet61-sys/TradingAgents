@@ -57,8 +57,8 @@ def _targets(entry: float, side: str, summ: dict, sig_tp, sig_sl) -> dict:
     elif not settings.RR_BINDING:
         atr_pct = (summ or {}).get("atr_pct") or 0.0
         if atr_pct > 0 and entry:
-            tp_move = min(6.0, max(0.4, 2.0 * atr_pct))
-            sl_move = min(4.0, max(0.25, 1.2 * atr_pct))
+            tp_move = min(6.0, max(0.4, settings.ATR_TP_MULT * atr_pct))
+            sl_move = min(4.0, max(0.25, settings.ATR_SL_MULT * atr_pct))
             tp2 = entry * (1 + tp_move / 100) if side == "LONG" else entry * (1 - tp_move / 100)
             sl2 = entry * (1 - sl_move / 100) if side == "LONG" else entry * (1 + sl_move / 100)
             mode = "atr"
@@ -160,11 +160,28 @@ def _simulate(symbol: str, tf: str, candles: List) -> dict:
             summ = ta.compute_feature_summary(window) or {}
         except Exception:
             summ = {}
+        # зеркало квант-фильтров live_engine (стоп-лист + сезонный объём)
+        try:
+            bl = {x.strip() for x in (settings.STYPE_BLOCKLIST or "").split(",") if x.strip()}
+            if last_type in bl or f"{last_type}:{symbol}" in bl:
+                continue
+            if settings.VOL_SEASON_GATE:
+                vrs = (summ or {}).get("vol_ratio_seasonal")
+                vst = {x.strip() for x in (settings.VOL_SEASON_STYPES or "").split(",") if x.strip()}
+                if vrs is not None and vrs < float(settings.VOL_SEASON_MIN) \
+                        and (not vst or last_type in vst):
+                    continue
+        except Exception:
+            pass
         tg = _targets(entry, sig.side.value, summ, sig.tp, sig.sl)
         open_t = {"symbol": symbol, "tf": tf, "side": sig.side.value,
                   "strategy": getattr(strat, "name", last_type), "stype": last_type,
                   "i": i, "ts": c.ts, "entry": entry, "tp": tg["tp"], "sl": tg["sl"],
-                  "mode": tg["mode"], "conf": round(sig.confidence, 3)}
+                  "mode": tg["mode"], "conf": round(sig.confidence, 3),
+                  "rsi": summ.get("rsi"), "atr_pct": summ.get("atr_pct"),
+                  "vol_ratio": summ.get("volume_ratio"),
+                  "vol_ratio_seasonal": summ.get("vol_ratio_seasonal"),
+                  "hour": (c.ts // 3_600_000) % 24}
 
     return {"trades": trades, "bars": n}
 
