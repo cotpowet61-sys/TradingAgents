@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title id="title">AI Trading Coach — sign up</title>
+<style>
+:root{color-scheme:dark;--bg:#070b16;--acc:#4da3ff;--ok:#16c784;--bad:#ea3943;--tx:#e8eefc;--mut:#8b98b8;--card:rgba(16,24,48,.72)}
+*{box-sizing:border-box;margin:0;font-family:'Segoe UI',system-ui,Arial}
+body{background:radial-gradient(1200px 600px at 70% -10%,#12214a 0%,var(--bg) 55%);color:var(--tx);min-height:100vh}
+canvas#neuro{position:fixed;inset:0;width:100%;height:100%;z-index:-1;opacity:.5}
+.wrap{max-width:1100px;margin:0 auto;padding:24px}
+nav{display:flex;justify-content:space-between;align-items:center;padding:8px 0}
+.logo{font-weight:800;font-size:20px;letter-spacing:.5px}.logo b{color:var(--acc)}
+.btn{background:linear-gradient(135deg,#3b82f6,#22d3ee);border:0;color:#04122b;font-weight:700;padding:12px 22px;border-radius:10px;cursor:pointer;font-size:15px;text-decoration:none;display:inline-block}
+.btn.ghost{background:transparent;border:1px solid #3a4a75;color:var(--tx)}
+.hero{display:grid;grid-template-columns:1.2fr .8fr;gap:36px;align-items:center;padding:56px 0}
+h1{font-size:44px;line-height:1.1}h1 span{background:linear-gradient(90deg,#4da3ff,#22d3ee);-webkit-background-clip:text;color:transparent}
+.sub{color:var(--mut);font-size:17px;margin:18px 0 26px;line-height:1.6}
+.card{background:var(--card);border:1px solid rgba(90,130,255,.18);border-radius:16px;padding:22px;backdrop-filter:blur(8px)}
+.card input{width:100%;margin:7px 0;padding:12px;border-radius:10px;border:1px solid #2b3a63;background:#0a1128;color:var(--tx)}
+.err{color:var(--bad);font-size:13px;min-height:16px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:30px 0}
+.f{padding:20px}.f h3{font-size:17px;margin-bottom:8px}.f p{color:var(--mut);font-size:14px;line-height:1.55}
+.stat b{font-size:26px;color:var(--ok)}.stat small{display:block;color:var(--mut);margin-top:2px}
+.track{margin:30px 0}.spark{display:flex;align-items:flex-end;gap:2px;height:90px;margin:14px 0}
+.spark i{flex:1;background:linear-gradient(180deg,#22d3ee,#4da3ff);border-radius:2px 2px 0 0;min-height:2px}
+table{width:100%;font-size:13px;border-collapse:collapse}td{padding:6px;border-bottom:1px solid rgba(90,130,255,.12);color:var(--mut)}
+td.w{color:var(--ok)}td.l{color:var(--bad)}
+.price{text-align:center;margin:40px 0}.price .big{font-size:52px;font-weight:800}.price small{color:var(--mut)}
+footer{color:var(--mut);font-size:12px;line-height:1.6;border-top:1px solid rgba(90,130,255,.12);padding:20px 0;margin-top:30px}
+a{color:var(--acc)}@media(max-width:840px){.hero,.grid3{grid-template-columns:1fr}h1{font-size:32px}}
+</style>
+</head>
+<body>
+<canvas id="neuro"></canvas>
+<div class="wrap">
+  <nav><div class="logo" id="brand">Trade<b>Vision</b></div>
+    <a class="btn ghost" href="#" onclick="showAuth('login');return false">Log in</a></nav>
+
+  <section class="hero">
+    <div>
+      <h1>Your AI trading coach<br><span>that learns from YOUR trades</span></h1>
+      <p class="sub" id="hero-sub">Live crypto scanner with 20+ strategies, AI agents that analyze your real history, and a self-learning filter that blocks your weakest setups. See exactly why you lose — and stop.</p>
+      <a class="btn" href="#" onclick="showAuth('signup');return false">Get access — $100/mo</a>
+      <p class="sub" style="font-size:13px;margin-top:12px">USDT (TRC20 / BEP20) · access activates automatically in 1–2 min · cancel anytime</p>
+    </div>
+    <div class="card" id="auth" hidden>
+      <h3 id="auth-title" style="margin-bottom:10px">Create account</h3>
+      <input id="email" type="email" placeholder="Email">
+      <input id="pass" type="password" placeholder="Password (6+ chars)">
+      <p class="err" id="auth-err"></p>
+      <button class="btn" style="width:100%" onclick="doAuth()">Sign up</button>
+      <p style="font-size:12px;color:var(--mut);margin-top:10px;text-align:center">
+        <a href="#" onclick="toggleMode();return false" id="mode-link">Already registered? Log in</a></p>
+    </div>
+  </section>
+
+  <section class="card track">
+    <h3>Live track record — verified, never edited retroactively</h3>
+    <div class="grid3" style="margin:14px 0 0">
+      <div class="stat"><b id="wr-all">—</b><small>win rate, all signals</small></div>
+      <div class="stat"><b id="wr-strong">—</b><small>win rate, 🎯 strong-zone only</small></div>
+      <div class="stat"><b id="n-all">—</b><small>closed signals total</small></div>
+    </div>
+    <div class="spark" id="spark"></div>
+    <table id="last"></table>
+    <p style="font-size:11px;color:var(--mut);margin-top:8px" id="track-note"></p>
+  </section>
+
+  <section class="grid3">
+    <div class="card f"><h3>🔍 Self-learning scanner</h3><p>Watches 13 coins × 20+ strategies in real time. Weak coin×strategy combos are automatically throttled or blocked after 3-day verification.</p></div>
+    <div class="card f"><h3>🧬 Your trading DNA</h3><p>Upload your exchange history and AI finds your worst zones — where you habitually lose. It's diagnostic, not promises.</p></div>
+    <div class="card f"><h3>🤖 5 AI agents</h3><p>Strategist, momentum, contrarian, macro and risk officers review setups on demand — you control every token spent.</p></div>
+    <div class="card f"><h3>💵 Position sizing</h3><p>Every signal ships with exact quantity, margin and risk in $ for your deposit and leverage. No more guessing lot size.</p></div>
+    <div class="card f"><h3>📊 Backtest before trust</h3><p>Validate the strategy on history, on any date range, before a single signal goes live for you.</p></div>
+    <div class="card f"><h3>🔒 Your keys stay read-only</h3><p>Exchange API keys are accepted read-only only, encrypted at rest. We can't trade — and we never hold your funds.</p></div>
+  </section>
+
+  <section class="price card">
+    <div class="big">$100<small style="font-size:18px;color:var(--mut)"> / month</small></div>
+    <p class="sub" style="margin:10px 0 18px">Full access: scanner, DNA coach, AI agents, sizing, backtests</p>
+    <a class="btn" href="#" onclick="showAuth('signup');return false">Sign up &amp; pay with USDT</a>
+  </section>
+
+  <footer>
+    <b>Risk disclosure.</b> This software is an educational/analytics tool, not financial advice, not asset management. Crypto futures trading carries high risk of loss; past performance never guarantees future results. Signals are analytical scenarios — final decisions are always yours. By subscribing you confirm you understand and accept these risks.
+    <br><span id="tg-link"></span>
+  </footer>
+</div>
+<script>
+const $=id=>document.getElementById(id);let MODE='signup';
+async function boot(){
+  const cfg=await(await fetch('/api/config')).catch(()=>null);
+  // конфиг закрыт в saas-режиме; бренд/тг тянем из me-fallback полей index ниже — лендинг самодостаточен
+  const me=await fetch('/api/auth/me').then(r=>r.ok?r.json():null).catch(()=>null);
+  if(me&&me.sub_active)location='/';
+  fetch('/api/public/track').then(r=>r.json()).then(t=>{
+    $('wr-all').textContent=t.all.winrate+'%';$('wr-strong').textContent=t.strong.winrate+'%';
+    $('n-all').textContent=t.all.n;$('track-note').textContent=t.note;
+    const mx=Math.max(...t.equity.map(Math.abs),1);
+    $('spark').innerHTML=t.equity.map(v=>`<i style="height:${2+88*Math.abs(v)/mx}px;opacity:${v<0?.35:1}"></i>`).join('');
+    $('last').innerHTML=t.last.slice(0,8).map(e=>`<tr><td>${e.day}</td><td>${e.symbol||''}</td><td>${e.side||''}</td><td class="${e.result==='WIN'?'w':'l'}">${e.result==='WIN'?'✅':'❌'} ${e.pnl_pct}%</td></tr>`).join('');
+  }).catch(()=>{});
+}
+function showAuth(m){MODE=m;$('auth').hidden=false;$('auth-title').textContent=m==='signup'?'Create account':'Log in';
+  document.querySelector('#auth button').textContent=m==='signup'?'Sign up':'Log in';
+  $('mode-link').textContent=m==='signup'?'Already registered? Log in':'No account yet? Sign up';
+  $('auth').scrollIntoView({behavior:'smooth'});}
+function toggleMode(){showAuth(MODE==='signup'?'login':'signup');}
+async function doAuth(){
+  $('auth-err').textContent='';
+  const r=await fetch('/api/auth/'+(MODE==='signup'?'register':'login'),{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({email:$('email').value,password:$('pass').value})});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){$('auth-err').textContent=d.detail||'error';return;}
+  location='/pay.html';
+}
+// нейро-фон: дрейфующие частицы-связи
+const cv=$('neuro'),cx=cv.getContext('2d');let W,H,P=[];
+function rs(){W=cv.width=innerWidth;H=cv.height=innerHeight;P=Array.from({length:70},()=>({x:Math.random()*W,y:Math.random()*H,vx:(Math.random()-.5)*.4,vy:(Math.random()-.5)*.4}));}rs();onresize=rs;
+(function loop(){cx.clearRect(0,0,W,H);P.forEach(p=>{p.x+=p.vx;p.y+=p.vy;if(p.x<0||p.x>W)p.vx*=-1;if(p.y<0||p.y>H)p.vy*=-1;});
+for(let i=0;i<P.length;i++)for(let j=i+1;j<P.length;j++){const dx=P[i].x-P[j].x,dy=P[i].y-P[j].y,d=dx*dx+dy*dy;
+if(d<150*150){cx.strokeStyle=`rgba(77,163,255,${(1-d/22500)*.16})`;cx.beginPath();cx.moveTo(P[i].x,P[i].y);cx.lineTo(P[j].x,P[j].y);cx.stroke();}}
+P.forEach(p=>{cx.fillStyle='rgba(120,180,255,.55)';cx.beginPath();cx.arc(p.x,p.y,1.6,0,7);cx.fill();});
+requestAnimationFrame(loop);})();
+boot();
+</script>
+</body>
+</html>

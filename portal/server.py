@@ -36,6 +36,14 @@ app = FastAPI(title="TradeVision Portal", version="1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+# SaaS-режим (аккаунты/подписка/трек) — активен только при SAAS_MODE=true в .env
+try:
+    import saas_routes as _saas
+    _saas.mount(app, settings, STATIC_DIR)
+except Exception as _e:  # модуль опционален — портал не должен падать из-за него
+    import logging as _lg
+    _lg.getLogger("portal.server").warning("[saas] mount skipped: %s", _e)
+
 
 @app.on_event("startup")
 async def _startup():
@@ -537,6 +545,12 @@ async def signals_backtest(payload: dict = Body(default={})):
 
 @app.websocket("/ws")
 async def ws(ws: WebSocket):
+    if settings.SAAS_MODE:  # строгий гейт и для живого канала
+        import authn as _a
+        u = _a.user_by_token(ws.cookies.get(_a.COOKIE))
+        if not u or not _a.sub_active(u):
+            await ws.close(code=4401)
+            return
     eng = get_engine()
     await eng.add(ws)
     try:

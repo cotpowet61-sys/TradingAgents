@@ -50,6 +50,7 @@ def record_outcome(ev: dict) -> None:
             "side": ev.get("side"),
             "stype": ev.get("stype") or ev.get("strategy") or "?",
             "conf": ev.get("conf"),
+            "fit": ev.get("fit"),
             "reason": ev.get("reason"),
             "pnl_pct": ev.get("pnl_pct"),
             "duration_min": ev.get("duration_min"),
@@ -269,3 +270,54 @@ def apply_actions(actions: List[dict], source: str = "ai-curator") -> List[dict]
         _rules_cache = rules
         _rules_mtime = time.time()
     return applied
+
+
+# ---------------------------------------------------------------------- #
+# Публичный трек-рекорд (честный, верифицируемый, только % — без сумм)
+# ---------------------------------------------------------------------- #
+def track_summary(fit_min: float = 60.0) -> dict:
+    """Сводка исходов наших сигналов для публичной страницы/лендинга.
+    Две ветки честно рядом: «все сигналы» и «🎯 кураторская» (fit score>=fit_min,
+    шкала 0..100 — только сильная зона). Данные только добавляются закрытиями
+    событий, задним числом не правятся. Сумм $ нет — один процент РОИ."""
+    CLOSED = ("TP", "SL", "EXPIRE", "RISK", "RISK2")
+    events = read_outcomes()
+    rows = [e for e in events
+            if e.get("reason") in CLOSED and isinstance(e.get("pnl_pct"), (int, float))]
+    rows.sort(key=lambda e: e.get("ts", 0))
+
+    def _score(e):
+        f = e.get("fit") or 0
+        if isinstance(f, dict):
+            f = f.get("score") or 0
+        return f if isinstance(f, (int, float)) else 0
+
+    def _branch(sel):
+        n = len(sel)
+        wins = sum(1 for e in sel if e["pnl_pct"] > 0)
+        total = round(sum(e["pnl_pct"] for e in sel), 2)
+        return {"n": n, "wins": wins, "losses": n - wins,
+                "winrate": round(100 * wins / n, 1) if n else 0.0, "total_pnl_pct": total}
+
+    strong = [e for e in rows if _score(e) >= fit_min]
+    # equity-кривая (% сумма шагом по ~40 точкам) — для графика лендинга
+    equity, cum, step = [], 0.0, max(1, len(rows) // 40)
+    for i, e in enumerate(rows):
+        cum += e["pnl_pct"]
+        if i % step == 0 or i == len(rows) - 1:
+            equity.append(round(cum, 2))
+    last = [{
+        "symbol": e.get("symbol"), "side": e.get("side"),
+        "result": "WIN" if e["pnl_pct"] > 0 else "LOSS",
+        "pnl_pct": round(e["pnl_pct"], 2),
+        "day": time.strftime("%d.%m", time.localtime(e.get("ts", 0) / 1000)),
+        "strong": _score(e) >= fit_min,
+    } for e in rows[-30:][::-1]]
+    return {
+        "all": _branch(rows),
+        "strong": _branch(strong),          # 🎯 ветка сильных зон
+        "fit_min": fit_min,
+        "equity": equity,
+        "last": last,
+        "note": "Записи добавляются автоматически при закрытии сигналов и не редактируются задним числом.",
+    }

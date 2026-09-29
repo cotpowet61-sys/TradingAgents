@@ -1274,6 +1274,16 @@ $('ntf-toasts').addEventListener('change', saveAllQuiet);
 
 /* ---------- Старт ---------- */
 (async () => {
+    // SaaS-гейт: проверяем сессию/подписку ДО подключения каналов
+    try {
+        const me = await fetch('/api/auth/me');
+        if (me.ok) {
+            const m = await me.json();
+            if (m.enabled) {
+                if (!m.sub_active) { location = '/pay.html'; return; }
+            }
+        } else if (me.status === 401) { location = '/landing.html'; return; }
+    } catch (_) { /* сеть недоступна — продолжаем в обычном режиме */ }
     chartInit();
     connectWS();
     await loadSettings();

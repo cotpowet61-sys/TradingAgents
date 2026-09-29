@@ -95,6 +95,20 @@ class PortalSettings(BaseSettings):
     RISK_PER_TRADE_PCT: float = 3.0  # доля депозита, которой рискуем в одной сделке
     LEVERAGE: float = 20.0           # плечо при расчёте объёма/маржи
 
+    # ------------------------------------------------------------------ #
+    # SaaS (мульти-пользовательский режим продажи подписки)
+    # ------------------------------------------------------------------ #
+    SAAS_MODE: bool = False          # включается ТОЛЬКО через .env (во избежание самоблокировки)
+    BRAND_NAME: str = "TradeVision"
+    PRICE_MONTH_USD: float = 100.0   # цена месяца доступа
+    # Публичные адреса приёма оплаты (ТОЛЬКО адреса! Приватных ключей на сервере НЕТ)
+    WALLET_TRC20: str = ""
+    WALLET_BEP20: str = ""
+    BSCSCAN_API_KEY: str = ""        # бесплатный ключ api.bscscan.com (для сканера BSC)
+    TELEGRAM_URL: str = ""           # канал поддержки/комьюнити
+    # Секрет подписи сессий. Если пуст — генерируется один раз и пишется в .env.
+    AUTH_SECRET: str = ""            # env PORTAL_AUTH_SECRET
+
     # Правила дэйтрейдинга (для отображения и контекста агентов)
     # 0 = без лимита (пользователь снял границу 30/день).
     MAX_TRADES_PER_DAY: int = 0
@@ -192,6 +206,13 @@ class PortalSettings(BaseSettings):
                 "max_hold_hours": self.MAX_HOLD_HOURS,
                 "default_sl_pct": self.DEFAULT_SL_PCT,
             },
+            "saas": {  # только публичные данные (адреса кошельков публичны по природе)
+                "enabled": self.SAAS_MODE,
+                "brand": self.BRAND_NAME,
+                "price_month": self.PRICE_MONTH_USD,
+                "wallets": {"trc20": self.WALLET_TRC20, "bep20": self.WALLET_BEP20},
+                "telegram": self.TELEGRAM_URL,
+            },
         }
 
     # ------------------------------------------------------------------ #
@@ -213,6 +234,12 @@ class PortalSettings(BaseSettings):
         "deposit_usd": ("DEPOSIT_USD", "DEPOSIT_USD"),
         "risk_per_trade_pct": ("RISK_PER_TRADE_PCT", "RISK_PER_TRADE_PCT"),
         "leverage": ("LEVERAGE", "LEVERAGE"),
+        "brand_name": ("BRAND_NAME", "BRAND_NAME"),
+        "price_month_usd": ("PRICE_MONTH_USD", "PRICE_MONTH_USD"),
+        "wallet_trc20": ("WALLET_TRC20", "WALLET_TRC20"),
+        "wallet_bep20": ("WALLET_BEP20", "WALLET_BEP20"),
+        "bscscan_api_key": ("BSCSCAN_API_KEY", "BSCSCAN_API_KEY"),
+        "telegram_url": ("TELEGRAM_URL", "TELEGRAM_URL"),
         "min_confidence": ("MIN_CONFIDENCE", "MIN_CONFIDENCE"),
         "signal_strategy": ("SIGNAL_STRATEGY", "SIGNAL_STRATEGY"),
         "notify_sound": ("NOTIFY_SOUND", "NOTIFY_SOUND"),
