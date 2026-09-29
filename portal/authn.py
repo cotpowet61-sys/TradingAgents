@@ -114,11 +114,30 @@ def cleanup_sessions() -> None:
 MONTH_MS = 30 * 86400 * MS
 
 
+def is_owner(user: dict) -> bool:
+    """Владелец продукта (OWNER_EMAILS в .env) — вечная подписка."""
+    if not user:
+        return False
+    try:
+        from portal_config import settings as _s
+        em = (user.get("email") or "").strip().lower()
+        owners = {e.strip().lower() for e in (_s.OWNER_EMAILS or "").split(",") if e.strip()}
+        return bool(em) and em in owners
+    except Exception:
+        return False
+
+
 def sub_active(user: dict) -> bool:
-    return bool(user) and int(user.get("sub_until_ms") or 0) > int(time.time() * MS)
+    if not user:
+        return False
+    if is_owner(user):
+        return True
+    return int(user.get("sub_until_ms") or 0) > int(time.time() * MS)
 
 
 def sub_days_left(user: dict) -> float:
+    if is_owner(user):
+        return 3650.0  # владельцу не показываем таймер — UI рисует ∞
     left = int(user.get("sub_until_ms") or 0) - int(time.time() * MS)
     return round(max(0.0, left / (86400 * MS)), 1)
 

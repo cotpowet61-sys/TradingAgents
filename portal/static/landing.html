@@ -313,12 +313,17 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape')closeAuth();});
 $('authModal').addEventListener('click',e=>{if(e.target.id==='authModal')closeAuth();});
 async function doAuth(){
   $('authErr').textContent='';
-  const r=await fetch('/api/auth/'+(window.MODE==='signup'?'register':'login'),{method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({email:$('email').value,password:$('pass').value})});
-  const d=await r.json().catch(()=>({}));
-  if(!r.ok){$('authErr').textContent=d.detail||'something went wrong';return;}
-  location='/pay.html';
+  const btn=$('authBtn');btn.disabled=true;const oldT=btn.textContent;btn.textContent='…';
+  try{
+    const r=await fetch('/api/auth/'+(window.MODE==='signup'?'register':'login'),{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email:$('email').value,password:$('pass').value})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){$('authErr').textContent=d.detail||('HTTP '+r.status);return;}
+    location='/pay.html';
+  }catch(e){
+    $('authErr').textContent='server unreachable — is the portal running?';
+  }finally{ btn.disabled=false;btn.textContent=oldT; }
 }
 /* ---------- agent-brain (hero right): 5 цветных кластеров-ролей ---------- */
 (function(){

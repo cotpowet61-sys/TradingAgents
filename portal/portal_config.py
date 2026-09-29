@@ -119,6 +119,9 @@ class PortalSettings(BaseSettings):
     TELEGRAM_URL: str = ""           # канал поддержки/комьюнити
     # Администрирование SaaS (только серверные, НЕ светятся в public())
     ADMIN_TOKEN: str = ""            # токен админ-API (партнёры/стата/выплаты)
+    # Владельцы продукта: email(ы) через запятую — у них подписка всегда активна,
+    # оплата не требуется, доступ ко всему продукту сразу после входа.
+    OWNER_EMAILS: str = ""
     TG_BOT_TOKEN: str = ""           # токен TG-бота (@BotFather) — бот+уведомления о платежах
     ADMIN_TG_ID: str = ""            # ваш числовой telegram id (кому слать оповещения)
     # Секрет подписи сессий. Если пуст — генерируется один раз и пишется в .env.
@@ -269,6 +272,7 @@ class PortalSettings(BaseSettings):
         "stype_blocklist": ("STYPE_BLOCKLIST", "STYPE_BLOCKLIST"),
         "leverage": ("LEVERAGE", "LEVERAGE"),
         "brand_name": ("BRAND_NAME", "BRAND_NAME"),
+        "owner_emails": ("OWNER_EMAILS", "OWNER_EMAILS"),
         "price_month_usd": ("PRICE_MONTH_USD", "PRICE_MONTH_USD"),
         "wallet_trc20": ("WALLET_TRC20", "WALLET_TRC20"),
         "wallet_bep20": ("WALLET_BEP20", "WALLET_BEP20"),

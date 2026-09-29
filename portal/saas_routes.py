@@ -96,6 +96,7 @@ def mount(app, settings, static_dir: str) -> None:
         return {
             "enabled": True,
             "email": user["email"],
+            "owner": authn.is_owner(user),
             "ref_code": user["ref_code"],
             "sub_active": authn.sub_active(user),
             "days_left": authn.sub_days_left(user),
@@ -105,6 +106,41 @@ def mount(app, settings, static_dir: str) -> None:
             "telegram": settings.TELEGRAM_URL,
             "wallets": {"trc20": settings.WALLET_TRC20, "bep20": settings.WALLET_BEP20},
         }
+
+    # ------------------------------------------------------------------ #
+    # Admin API (x-admin-token: создать/посмотреть коды, отметить выплату)
+    # ------------------------------------------------------------------ #
+    def _adm(request: Request) -> bool:
+        import hmac as _h
+        tok = request.headers.get("x-admin-token", "") or ""
+        return bool(settings.ADMIN_TOKEN) and _h.compare_digest(tok, str(settings.ADMIN_TOKEN))
+
+    @app.post("/api/admin/partners")
+    async def admin_create_partner(request: Request, payload: dict = Body(default={})):
+        if not _adm(request):
+            return JSONResponse({"detail": "forbidden"}, status_code=403)
+        try:
+            import partners as P
+            return P.create_partner(str(payload.get("code", "")),
+                                    str(payload.get("label", "")),
+                                    float(payload.get("pct", 30.0)))
+        except ValueError as e:
+            return JSONResponse({"detail": str(e)}, status_code=400)
+
+    @app.get("/api/admin/partners")
+    async def admin_list_partners(request: Request):
+        if not _adm(request):
+            return JSONResponse({"detail": "forbidden"}, status_code=403)
+        import partners as P
+        return {"partners": P.list_partners()}
+
+    @app.post("/api/admin/partner/pay")
+    async def admin_pay_partner(request: Request, payload: dict = Body(...)):
+        if not _adm(request):
+            return JSONResponse({"detail": "forbidden"}, status_code=403)
+        import partners as P
+        n = P.mark_paid(str(payload.get("code", "")), str(payload.get("tx_ref", "")))
+        return {"ok": True, "paid_entries": n}
 
     # ------------------------------------------------------------------ #
     # Billing
