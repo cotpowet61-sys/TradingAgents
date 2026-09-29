@@ -342,19 +342,13 @@ class LiveEngine:
                                 sl2 = e * (1 + sl_m / 100)
                             risk_manual = True
                             hold_min = settings.MANUAL_HOLD_MIN or None
-                        elif not settings.RR_BINDING:
-                            # Правило 2/1 снято → цели по волатильности графика (ATR)
-                            atr_pct = (summ or {}).get("atr_pct") or 0.0
-                            if atr_pct > 0 and e:
-                                tp_move = min(6.0, max(0.4, settings.ATR_TP_MULT * atr_pct))
-                                sl_move = min(4.0, max(0.25, settings.ATR_SL_MULT * atr_pct))
-                                if sig.side.value == "LONG":
-                                    tp2 = e * (1 + tp_move / 100)
-                                    sl2 = e * (1 - sl_move / 100)
-                                else:
-                                    tp2 = e * (1 - tp_move / 100)
-                                    sl2 = e * (1 + sl_move / 100)
-                                rr_free = True
+                        else:
+                            # Плавающие цели через общий хелпер (ATR → рамки TP/SL_PCT_*)
+                            import signal_gates as G
+                            tg = G.compute_targets(settings, e, sig.side.value,
+                                                   (summ or {}).get("atr_pct"), tp2, sl2)
+                            tp2, sl2 = tg["tp"], tg["sl"]
+                            rr_free = tg["mode"] != "manual"
                     except Exception:
                         fit = None
                     event = {

@@ -57,7 +57,8 @@ DEFAULT_SYMS = ("BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,"
 KNOBS = ("MIN_CONFIDENCE", "RR_BINDING", "ATR_TP_MULT", "ATR_SL_MULT",
          "VOL_SEASON_GATE", "VOL_SEASON_MIN", "VOL_SEASON_STYPES", "STYPE_BLOCKLIST",
          "VOL_SEASON_BLOCK", "ATR_PCT_BLOCK", "HOURS_BLOCK",
-         "BE_TRIGGER_PCT", "BE_OFFSET_PCT", "TRAIL_START_PCT", "TRAIL_PCT")
+         "BE_TRIGGER_PCT", "BE_OFFSET_PCT", "TRAIL_START_PCT", "TRAIL_PCT",
+         "MANUAL_TP_PCT", "MANUAL_SL_PCT")
 
 
 # --------------------------------------------------------------------------- #
@@ -249,6 +250,12 @@ def build_variants(baseline_trades: list, quick: bool = False) -> list:
         ("vol_block_1.0-2.0+3up", {"VOL_SEASON_BLOCK": "1.0-2.0,3.0-999"}),
         ("atr_block_0.6-1.0", {"ATR_PCT_BLOCK": "0.6-1.0"}),
         ("hours_block_3_11_19", {"HOURS_BLOCK": "3,11,19"}),
+        # — сетка соотношений TP/SL (плавающие цели; ищем зону 70% адекватно) —
+        ("fix_1.2_0.8", {"MANUAL_TP_PCT": 1.2, "MANUAL_SL_PCT": 0.8}),
+        ("fix_1.0_1.0", {"MANUAL_TP_PCT": 1.0, "MANUAL_SL_PCT": 1.0}),
+        ("fix_0.8_1.2", {"MANUAL_TP_PCT": 0.8, "MANUAL_SL_PCT": 1.2}),
+        ("fix_0.6_1.5", {"MANUAL_TP_PCT": 0.6, "MANUAL_SL_PCT": 1.5}),
+        ("atr_tp1.0_sl1.5", {"RR_BINDING": False, "ATR_TP_MULT": 1.0, "ATR_SL_MULT": 1.5}),
         # — механика выхода: высокий winrate честно —
         ("be_0.8_0.10", {"BE_TRIGGER_PCT": 0.8, "BE_OFFSET_PCT": 0.10}),
         ("be_1.0_0.15", {"BE_TRIGGER_PCT": 1.0, "BE_OFFSET_PCT": 0.15}),
@@ -272,7 +279,8 @@ def build_variants(baseline_trades: list, quick: bool = False) -> list:
                                   "TRAIL_START_PCT": 1.4, "TRAIL_PCT": 0.6}))
     if quick:
         keep = ("baseline",) + tuple(v[0] for v in full if v[0].startswith("block_")) + \
-            ("be_1.0_0.15", "be1.0+trail1.4_0.6", "vol_block_1.0-2.0+3up", "combo", "combo+be")
+            ("be_1.0_0.15", "be1.0+trail1.4_0.6", "vol_block_1.0-2.0+3up", "combo", "combo+be",
+             "fix_0.8_1.2", "fix_1.0_1.0", "fix_0.6_1.5")
         full = [v for v in full if v[0] in keep]
     return full
 

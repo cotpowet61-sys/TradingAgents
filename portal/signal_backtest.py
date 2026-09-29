@@ -47,27 +47,10 @@ def _tf_ms(tf: str) -> int:
 
 
 def _targets(entry: float, side: str, summ: dict, sig_tp, sig_sl) -> dict:
-    """Приоритет целей — как в live_engine.scan_once."""
-    tp2, sl2, mode = sig_tp, sig_sl, "strategy"
-    if settings.manual_risk and entry:
-        tp_m, sl_m = settings.MANUAL_TP_PCT, settings.MANUAL_SL_PCT
-        tp2 = entry * (1 + tp_m / 100) if side == "LONG" else entry * (1 - tp_m / 100)
-        sl2 = entry * (1 - sl_m / 100) if side == "LONG" else entry * (1 + sl_m / 100)
-        mode = "manual"
-    elif not settings.RR_BINDING:
-        atr_pct = (summ or {}).get("atr_pct") or 0.0
-        if atr_pct > 0 and entry:
-            tp_move = min(6.0, max(0.4, settings.ATR_TP_MULT * atr_pct))
-            sl_move = min(4.0, max(0.25, settings.ATR_SL_MULT * atr_pct))
-            tp2 = entry * (1 + tp_move / 100) if side == "LONG" else entry * (1 - tp_move / 100)
-            sl2 = entry * (1 - sl_move / 100) if side == "LONG" else entry * (1 + sl_move / 100)
-            mode = "atr"
-    if (not tp2 or not sl2) and entry:  # у стратегии нет целей → дефолт 2%/1%
-        tp2 = entry * 1.02 if side == "LONG" else entry * 0.98
-        sl2 = entry * 0.99 if side == "LONG" else entry * 1.01
-        if mode == "strategy":
-            mode = "default_2_1"
-    return {"tp": tp2, "sl": sl2, "mode": mode}
+    """Приоритет целей — общий хелпер signal_gates (плавающие, в рамках)."""
+    import signal_gates as G
+    return G.compute_targets(settings, entry, side,
+                             (summ or {}).get("atr_pct"), sig_tp, sig_sl)
 
 
 async def _load_history(symbol: str, tf: str, days: int) -> List:

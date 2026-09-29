@@ -106,3 +106,55 @@ def update_stops(settings, sig: dict, px: float) -> bool:
     if moved:
         sig["sl"] = new_sl
     return moved
+
+
+def compute_targets(settings, entry: float, side: str,
+                    atr_pct: float | None, sig_tp, sig_sl) -> dict:
+    """Плавающие цели TP/SL в адекватных рамках (сторожки против 0.001%/10%).
+
+    Приоритет:
+      1) ручной риск-фактор (MANUAL_TP/SL) — как задано, без клампа;
+      2) ATR-режим (по умолчанию): move = множитель × ATR%, но в рамках
+         TP_PCT_MIN..TP_PCT_MAX / SL_PCT_MIN..SL_PCT_MAX;
+      3) цели стратегии — поджимаются в те же рамки;
+      4) запасной плавающий дефолт (середина рамок);
+      5) RR_BINDING=True (наследие) — старый строгий 2%/1%, если ATR нет.
+    """
+    lo_tp = float(getattr(settings, "TP_PCT_MIN", 0.5) or 0.5)
+    hi_tp = float(getattr(settings, "TP_PCT_MAX", 3.0) or 3.0)
+    lo_sl = float(getattr(settings, "SL_PCT_MIN", 0.25) or 0.25)
+    hi_sl = float(getattr(settings, "SL_PCT_MAX", 2.5) or 2.5)
+
+    def mk(e: float, sd: str, tp_move: float, sl_move: float):
+        if sd == "LONG":
+            return e * (1 + tp_move / 100), e * (1 - sl_move / 100)
+        return e * (1 - tp_move / 100), e * (1 + sl_move / 100)
+
+    tp2, sl2, mode = sig_tp, sig_sl, "strategy"
+    if settings.manual_risk and entry:
+        tp2, sl2 = mk(entry, side, settings.MANUAL_TP_PCT, settings.MANUAL_SL_PCT)
+        mode = "manual"
+    elif entry and (atr_pct or 0) > 0:
+        tp_move = min(hi_tp, max(lo_tp, float(getattr(settings, "ATR_TP_MULT", 1.6)) * atr_pct))
+        sl_move = min(hi_sl, max(lo_sl, float(getattr(settings, "ATR_SL_MULT", 1.2)) * atr_pct))
+        tp2, sl2 = mk(entry, side, tp_move, sl_move)
+        mode = "atr"
+    elif entry and getattr(settings, "RR_BINDING", False):
+        tp2, sl2 = mk(entry, side, 2.0, 1.0)
+        mode = "rr21"
+
+    if mode == "strategy" and entry and tp2 and sl2:
+        # цели стратегии — тоже в адекватных рамках
+        tp_move = abs(tp2 - entry) / entry * 100
+        sl_move = abs(entry - sl2) / entry * 100
+        tp_move = min(hi_tp, max(lo_tp, tp_move))
+        sl_move = min(hi_sl, max(lo_sl, sl_move))
+        tp2, sl2 = mk(entry, side, tp_move, sl_move)
+        mode = "strategy_clamped"
+
+    if (not tp2 or not sl2) and entry:
+        tp2, sl2 = mk(entry, side, (lo_tp + hi_tp) / 2 if mode != "rr21" else 2.0,
+                      (lo_sl + hi_sl) / 2 if mode != "rr21" else 1.0)
+        if mode == "strategy":
+            mode = "default_float"
+    return {"tp": tp2, "sl": sl2, "mode": mode}

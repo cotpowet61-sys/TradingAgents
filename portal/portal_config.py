@@ -84,7 +84,7 @@ class PortalSettings(BaseSettings):
     NOTIFY_TOASTS: bool = True
     # Привязка правила TP≥2% / SL 1% (RR 2:1) к live-сигналам.
     # False = цели считаются по ATR свежего графика (сигналы «дышат» под волу).
-    RR_BINDING: bool = True
+    RR_BINDING: bool = False     # True = наследие: строгий дефолт TP 2% / SL 1%
     # Ручной риск-фактор: если TP и SL > 0 — сигналы получают именно эти цели
     # (приоритет над привязкой 2:1 и над ATR). 0 = выключено.
     MANUAL_TP_PCT: float = 0.0
@@ -120,6 +120,11 @@ class PortalSettings(BaseSettings):
     # Трейлинг: после TRAIL_START_PCT% прибыли стоп следует за ценой на TRAIL_PCT%.
     TRAIL_START_PCT: float = 0.0
     TRAIL_PCT: float = 0.6
+    # ---- Адекватные рамки плавающих целей (против TP 0.001% / SL 10%) ----
+    TP_PCT_MIN: float = 0.5
+    TP_PCT_MAX: float = 3.0
+    SL_PCT_MIN: float = 0.25
+    SL_PCT_MAX: float = 2.5
 
     # ------------------------------------------------------------------ #
     # SaaS (мульти-пользовательский режим продажи подписки)
@@ -150,7 +155,7 @@ class PortalSettings(BaseSettings):
     # Правила дэйтрейдинга (для отображения и контекста агентов)
     # 0 = без лимита (пользователь снял границу 30/день).
     MAX_TRADES_PER_DAY: int = 0
-    MIN_TP_PCT: float = 2.0
+    MIN_TP_PCT: float = 0.5  # правило «мин. TP 2%» снято: плавающие цели в рамках TP_PCT_*
     MAX_HOLD_HOURS: float = 4.0
     DEFAULT_SL_PCT: float = 1.0
 
@@ -254,6 +259,10 @@ class PortalSettings(BaseSettings):
                     "trail_start_pct": self.TRAIL_START_PCT,
                     "trail_pct": self.TRAIL_PCT,
                 },
+                "target_bounds": {
+                    "tp_pct_min": self.TP_PCT_MIN, "tp_pct_max": self.TP_PCT_MAX,
+                    "sl_pct_min": self.SL_PCT_MIN, "sl_pct_max": self.SL_PCT_MAX,
+                },
             },
             "rules": {
                 "max_trades_per_day": self.MAX_TRADES_PER_DAY,
@@ -301,6 +310,10 @@ class PortalSettings(BaseSettings):
         "be_offset_pct": ("BE_OFFSET_PCT", "BE_OFFSET_PCT"),
         "trail_start_pct": ("TRAIL_START_PCT", "TRAIL_START_PCT"),
         "trail_pct": ("TRAIL_PCT", "TRAIL_PCT"),
+        "tp_pct_min": ("TP_PCT_MIN", "TP_PCT_MIN"),
+        "tp_pct_max": ("TP_PCT_MAX", "TP_PCT_MAX"),
+        "sl_pct_min": ("SL_PCT_MIN", "SL_PCT_MIN"),
+        "sl_pct_max": ("SL_PCT_MAX", "SL_PCT_MAX"),
         "leverage": ("LEVERAGE", "LEVERAGE"),
         "brand_name": ("BRAND_NAME", "BRAND_NAME"),
         "owner_emails": ("OWNER_EMAILS", "OWNER_EMAILS"),
