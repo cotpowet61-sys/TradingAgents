@@ -113,6 +113,21 @@ def _parse_ts(s: Optional[str]) -> Optional[int]:
 # Загрузка сделок (с файловым кэшем и инкрементальной догрузкой)
 # ---------------------------------------------------------------------- #
 CACHE_PATH = os.path.join(DATA_DIR, "trades_cache.json")
+
+
+def _cp() -> str:
+    """Путь кэша сделок. В SaaS-режиме (per-user ключи) — отдельный файл
+    на каждый api_key (по хэшу), чтобы юзеры не видели чужой кэш."""
+    try:
+        from bybit_account import _KEY_OVERRIDE
+        o = _KEY_OVERRIDE.get()
+        if o and o[0]:
+            import hashlib
+            h = hashlib.sha256(o[0].encode()).hexdigest()[:16]
+            return os.path.join(DATA_DIR, f"trades_cache_{h}.json")
+    except Exception:
+        pass
+    return CACHE_PATH
 _OVERLAP_MS = 2 * 86_400_000  # перекрытие окна догрузки (защита от поздних апдейтов)
 
 
@@ -122,10 +137,10 @@ def _trade_key(t: dict) -> str:
 
 
 def _read_cache() -> dict:
-    if not os.path.exists(CACHE_PATH):
+    if not os.path.exists(_cp()):
         return {}
     try:
-        with open(CACHE_PATH, "r", encoding="utf-8") as f:
+        with open(_cp(), "r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data.get("trades"), list):
             return data
@@ -136,7 +151,7 @@ def _read_cache() -> dict:
 
 def _write_cache(trades: List[dict], fetched_days: int) -> None:
     os.makedirs(DATA_DIR, exist_ok=True)
-    with open(CACHE_PATH, "w", encoding="utf-8") as f:
+    with open(_cp(), "w", encoding="utf-8") as f:
         json.dump({"fetched_days": fetched_days,
                    "synced_at": int(time.time() * 1000),
                    "count": len(trades),

@@ -106,6 +106,10 @@ class PortalSettings(BaseSettings):
     WALLET_BEP20: str = ""
     BSCSCAN_API_KEY: str = ""        # бесплатный ключ api.bscscan.com (для сканера BSC)
     TELEGRAM_URL: str = ""           # канал поддержки/комьюнити
+    # Администрирование SaaS (только серверные, НЕ светятся в public())
+    ADMIN_TOKEN: str = ""            # токен админ-API (партнёры/стата/выплаты)
+    TG_BOT_TOKEN: str = ""           # токен TG-бота (@BotFather) — бот+уведомления о платежах
+    ADMIN_TG_ID: str = ""            # ваш числовой telegram id (кому слать оповещения)
     # Секрет подписи сессий. Если пуст — генерируется один раз и пишется в .env.
     AUTH_SECRET: str = ""            # env PORTAL_AUTH_SECRET
 

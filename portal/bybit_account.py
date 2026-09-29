@@ -41,6 +41,30 @@ _srv_mono: float = 0.0      # time.monotonic() в тот же момент
 _CLOCK_TTL_SEC: float = 4.0
 _SIGN_MARGIN_MS: float = 1000.0
 
+# ---------------------------------------------------------------------- #
+# Per-user ключи (SaaS): контекстная подмена кредов на время запроса.
+# В монопольном режиме None → берутся глобальные из настроек (как прежде).
+# ---------------------------------------------------------------------- #
+import contextvars
+_KEY_OVERRIDE: contextvars.ContextVar = contextvars.ContextVar("bybit_creds", default=None)
+
+
+def _creds():
+    o = _KEY_OVERRIDE.get()
+    if o:
+        return o
+    return settings.BYBIT_API_KEY, settings.BYBIT_API_SECRET
+
+
+def use_user_keys(api_key: str, api_secret: str):
+    """Контекст-менеджер: запрос выполняется от чужих (юзерских) ключей."""
+    token = _KEY_OVERRIDE.set((api_key, api_secret))
+
+    class _CM:
+        def __enter__(self): return self
+        def __exit__(self, *a): _KEY_OVERRIDE.reset(token)
+    return _CM()
+
 
 def _bases_ordered() -> List[str]:
     return ([settings.BYBIT_BASE_URL] if settings.BYBIT_BASE_URL else []) + \
@@ -82,12 +106,14 @@ def server_time_ms() -> int:
 
 
 def _sign(ts: int, recv: int, payload: str) -> str:
-    raw = f"{ts}{settings.BYBIT_API_KEY}{recv}{payload}"
-    return hmac.new(settings.BYBIT_API_SECRET.encode(), raw.encode(), hashlib.sha256).hexdigest()
+    api_key, api_secret = _creds()
+    raw = f"{ts}{api_key}{recv}{payload}"
+    return hmac.new(api_secret.encode(), raw.encode(), hashlib.sha256).hexdigest()
 
 
 async def _get(path: str, params: dict) -> dict:
-    if not settings.has_bybit_keys():
+    api_key, api_secret = _creds()
+    if not api_key or not api_secret:
         raise BybitAuthError("Не заданы read-only ключи Bybit — введите их в Настройках (раздел «Мои сделки»)")
     # убираем пустые
     params = {k: v for k, v in params.items() if v is not None and v != ""}
@@ -106,7 +132,7 @@ async def _get(path: str, params: dict) -> dict:
                     # не участвуют в подписи → 10002 исключён по построению.
                     ts = int(await _server_now_ms(force=retry > 0) - _SIGN_MARGIN_MS)
                     headers = {
-                        "X-BAPI-API-KEY": settings.BYBIT_API_KEY,
+                        "X-BAPI-API-KEY": api_key,
                         "X-BAPI-SIGN": _sign(ts, recv, query),
                         "X-BAPI-TIMESTAMP": str(ts),
                         "X-BAPI-RECV-WINDOW": str(recv),
@@ -218,7 +244,7 @@ async def diagnose() -> dict:
         recv = 20000
         query = "category=linear&limit=1"
         headers = {
-            "X-BAPI-API-KEY": settings.BYBIT_API_KEY,
+            "X-BAPI-API-KEY": api_key,
             "X-BAPI-SIGN": _sign(ts, recv, query),
             "X-BAPI-TIMESTAMP": str(ts),
             "X-BAPI-RECV-WINDOW": str(recv),

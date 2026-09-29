@@ -22,6 +22,7 @@ import httpx
 
 import authn
 import db
+import partners
 
 log = logging.getLogger("portal.billing")
 
@@ -34,6 +35,20 @@ USDT_TRON_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 USDT_BSC_CONTRACT = "0x55d398326f99059F775485246999027B3197955"
 
 NETWORKS = ("trc20", "bep20")
+
+
+async def notify_admin(text: str, settings) -> None:
+    """Оповещение владельцев в Telegram (бот токена/чат id из серверного .env)."""
+    token = (getattr(settings, "TG_BOT_TOKEN", "") or "").strip()
+    chat_id = (getattr(settings, "ADMIN_TG_ID", "") or "").strip()
+    if not token or not chat_id:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10) as cli:
+            await cli.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                           json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True})
+    except Exception as e:  # noqa: BLE001 — оповещение не должно ронять оплату
+        log.warning("[billing] tg-notify failed: %s", e)
 
 
 # --------------------------------------------------------------------- #
@@ -112,8 +127,11 @@ def record_tx(network: str, tx_hash: str, to_address: str, amount: float, ms: in
             db.execute("INSERT INTO paid_tx(tx_hash, user_id, network, amount, ms) VALUES (?,?,?,?,?)",
                        (tx_hash, inv["user_id"], network, amount, ms or now))
             new_until = authn.extend_subscription(inv["user_id"], 1)
-            log.info("[billing] оплата %s %.2f USDT от user#%s → доступ до %s", network, amount,
-                     inv["user_id"], time.strftime("%Y-%m-%d", time.gmtime(new_until / 1000)))
+            user = db.q("SELECT * FROM users WHERE id=?", (inv["user_id"],), one=True) or {}
+            credited = partners.credit_payment(user, float(amount), tx_ref=tx_hash)  # % трафферу
+            log.info("[billing] оплата %s %.2f USDT от user#%s → доступ до %s%s", network, amount,
+                     inv["user_id"], time.strftime("%Y-%m-%d", time.gmtime(new_until / 1000)),
+                     f" | партнёр {credited['code']} +${credited['amount']}" if credited else "")
             return db.q("SELECT * FROM invoices WHERE id=?", (inv["id"],), one=True)
     return None
 
@@ -180,11 +198,22 @@ async def scan_once(settings) -> dict:
                 log.warning("[billing] %s scan error: %s", net, e)
                 continue
             for t in txs:
-                if record_tx(net, t["tx_hash"], t["to"], t["amount"], t["ms"], addr):
+                paid = record_tx(net, t["tx_hash"], t["to"], t["amount"], t["ms"], addr)
+                if paid:
                     credited += 1
+                    usr = db.q("SELECT email, referred_by FROM users WHERE id=?", (paid["user_id"],), one=True) or {}
+                    ref = usr.get("referred_by") or ""
+                    await notify_admin(
+                        f"💰 Оплата {paid['amount']} USDT ({net})\n"
+                        f"Юзер: {usr.get('email','?')} (#{paid['user_id']})\n"
+                        + (f"Траффер: {ref}\n" if ref else "")
+                        + f"Время: {time.strftime('%d.%m %H:%M UTC', time.gmtime())}",
+                        settings,
+                    )
     # закрываем протухшие инвойсы
     db.execute("UPDATE invoices SET status='expired' WHERE status='pending' AND expires_ms<?",
                (int(time.time() * MS),))
+    partners.release_due()   # устаревший hold трафферам → к выплате
     return {"credited": credited}
 
 

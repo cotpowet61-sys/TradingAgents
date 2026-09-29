@@ -42,7 +42,7 @@ def check_password(password: str, pass_hex: str, salt_hex: str) -> bool:
 # --------------------------------------------------------------------- #
 # Пользователи
 # --------------------------------------------------------------------- #
-def register(email: str, password: str) -> dict:
+def register(email: str, password: str, referred_by: str = "") -> dict:
     email = (email or "").strip().lower()
     if not _EMAIL_RE.match(email):
         raise ValueError("invalid_email")
@@ -53,9 +53,11 @@ def register(email: str, password: str) -> dict:
     pass_hex, salt_hex = hash_password(password)
     now = int(time.time() * MS)
     ref = secrets.token_hex(4)
+    if referred_by and not db.q("SELECT code FROM traffickers WHERE code=? AND active=1", (referred_by,), one=True):
+        referred_by = ""  # атрибуция только на живых трафферов
     db.execute(
-        "INSERT INTO users(email, pass_hex, salt_hex, created_ms, ref_code) VALUES (?,?,?,?,?)",
-        (email, pass_hex, salt_hex, now, ref),
+        "INSERT INTO users(email, pass_hex, salt_hex, created_ms, ref_code, referred_by) VALUES (?,?,?,?,?,?)",
+        (email, pass_hex, salt_hex, now, ref, referred_by),
     )
     return db.q("SELECT * FROM users WHERE email=?", (email,), one=True)
 

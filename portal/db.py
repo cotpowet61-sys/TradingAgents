@@ -108,6 +108,56 @@ CREATE INDEX IF NOT EXISTS idx_inv_net ON invoices(network, status);
 """
 
 
+
+TRAFF_SQLITE = """
+CREATE TABLE IF NOT EXISTS traffickers (
+  code TEXT PRIMARY KEY,
+  label TEXT NOT NULL DEFAULT '',
+  secret TEXT NOT NULL DEFAULT '',
+  pct REAL NOT NULL DEFAULT 30.0,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_ms INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS hits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT NOT NULL, ip TEXT NOT NULL DEFAULT '', ua TEXT NOT NULL DEFAULT '',
+  created_ms INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ledger (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT NOT NULL, user_id INTEGER NOT NULL, amount_usd REAL NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending', created_ms INTEGER NOT NULL,
+  released_ms INTEGER NOT NULL DEFAULT 0, tx_ref TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_hits_code ON hits(code, created_ms);
+CREATE INDEX IF NOT EXISTS idx_ledger_code ON ledger(code, status);
+"""
+
+TRAFF_PG = """
+CREATE TABLE IF NOT EXISTS traffickers (
+  code TEXT PRIMARY KEY,
+  label TEXT NOT NULL DEFAULT '',
+  secret TEXT NOT NULL DEFAULT '',
+  pct DOUBLE PRECISION NOT NULL DEFAULT 30.0,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_ms BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS hits (
+  id BIGSERIAL PRIMARY KEY,
+  code TEXT NOT NULL, ip TEXT NOT NULL DEFAULT '', ua TEXT NOT NULL DEFAULT '',
+  created_ms BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ledger (
+  id BIGSERIAL PRIMARY KEY,
+  code TEXT NOT NULL, user_id BIGINT NOT NULL, amount_usd DOUBLE PRECISION NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending', created_ms BIGINT NOT NULL,
+  released_ms BIGINT NOT NULL DEFAULT 0, tx_ref TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_hits_code ON hits(code, created_ms);
+CREATE INDEX IF NOT EXISTS idx_ledger_code ON ledger(code, status);
+"""
+
+
 def _conn():
     if _USE_PG:
         return _pg.connect(DATABASE_URL, autocommit=True, row_factory=_dict_row)
@@ -120,10 +170,19 @@ def _conn():
 
 
 def init_schema() -> None:
-    ddl = _SCHEMA_PG if _USE_PG else _SCHEMA_SQLITE
+    ddl = (_SCHEMA_PG + TRAFF_PG) if _USE_PG else (_SCHEMA_SQLITE + TRAFF_SQLITE)
     with _lock, _conn() as c:
         for stmt in [s.strip() for s in ddl.split(";") if s.strip()]:
             c.execute(stmt)
+    # мягкие миграции (SQLite кричит на дубль колонки — глушим)
+    for mig in ("ALTER TABLE users ADD COLUMN referred_by TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE users ADD COLUMN user_keys_enc TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE traffickers ADD COLUMN tg_id INTEGER NOT NULL DEFAULT 0"):
+        try:
+            with _lock, _conn() as c:
+                c.execute(mig)
+        except Exception:
+            pass
 
 
 def q(sql: str, params: tuple = (), one: bool = False):

@@ -49,6 +49,8 @@ async function boot(){
   if(!r.ok){location='/landing.html';return;}
   ME=await r.json();if(!ME.enabled){location='/';return;}
   $('who').textContent=ME.email;$('price').textContent='$'+ME.price;
+  if(ME.telegram){const tg=document.getElementById('tg');tg.href=ME.telegram;tg.target='_blank';}
+  if(ME.brand)document.title='Activate access — '+ME.brand;
   if(ME.wallets&&ME.wallets.trc20==='')$('b-trc').style.display='none';
   if(ME.wallets&&ME.wallets.bep20==='')$('b-bsc').style.display='none';
   if(ME.sub_active){$('active').style.display='block';

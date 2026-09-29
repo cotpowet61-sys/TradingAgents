@@ -1,0 +1,19 @@
+[Unit]
+Description=TradeVision Portal (SaaS)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tradevision
+WorkingDirectory=/srv/tradevision/portal
+ExecStart=/srv/tradevision/venv/bin/python -m uvicorn server:app --host 127.0.0.1 --port 3005
+Restart=always
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+# защита процесса
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

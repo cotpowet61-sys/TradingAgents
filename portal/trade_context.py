@@ -27,6 +27,21 @@ from strategies import indicators as ta
 
 DNA_PATH = os.path.join(DATA_DIR, "trader_dna.json")
 PERSONA_PATH = os.path.join(DATA_DIR, "persona.json")
+
+
+def _up(path: str) -> str:
+    """SaaS: персональный файл юзера по его ключу (hash16), иначе глобальный путь."""
+    try:
+        from bybit_account import _KEY_OVERRIDE
+        o = _KEY_OVERRIDE.get()
+        if o and o[0]:
+            import hashlib as _h
+            h = _h.sha256(o[0].encode()).hexdigest()[:16]
+            base, ext = os.path.splitext(path)
+            return f"{base}_{h}{ext}"
+    except Exception:
+        pass
+    return path
 ENRICH_LIMIT = 60          # сколько последних сделок обогащаем свечным контекстом
 MARGIN_BEFORE = 24         # баров до входа (контекст графика в модалке)
 MARGIN_AFTER = 8           # баров после выхода
@@ -315,13 +330,13 @@ def fit_score(dna: Optional[dict], symbol: str, side: str, rsi: Optional[float] 
 # ---------------------------------------------------------------------- #
 def save_dna(dna: dict) -> None:
     os.makedirs(DATA_DIR, exist_ok=True)
-    with open(DNA_PATH, "w", encoding="utf-8") as f:
+    with open(_up(DNA_PATH), "w", encoding="utf-8") as f:
         json.dump(dna, f, ensure_ascii=False)
 
 
 def load_dna() -> Optional[dict]:
     try:
-        with open(DNA_PATH, "r", encoding="utf-8") as f:
+        with open(_up(DNA_PATH), "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return None
@@ -329,20 +344,20 @@ def load_dna() -> Optional[dict]:
 
 def dna_mtime() -> float:
     try:
-        return os.path.getmtime(DNA_PATH)
+        return os.path.getmtime(_up(DNA_PATH))
     except OSError:
         return 0.0
 
 
 def save_persona(persona: dict) -> None:
     os.makedirs(DATA_DIR, exist_ok=True)
-    with open(PERSONA_PATH, "w", encoding="utf-8") as f:
+    with open(_up(PERSONA_PATH), "w", encoding="utf-8") as f:
         json.dump(persona, f, ensure_ascii=False)
 
 
 def load_persona() -> Optional[dict]:
     try:
-        with open(PERSONA_PATH, "r", encoding="utf-8") as f:
+        with open(_up(PERSONA_PATH), "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return None
@@ -550,13 +565,13 @@ def derive_my_strategy(dna: dict, trades: List[dict]) -> dict:
 
 def save_my_strategy(ms: dict) -> None:
     os.makedirs(DATA_DIR, exist_ok=True)
-    with open(MYSTRATEGY_PATH, "w", encoding="utf-8") as f:
+    with open(_up(MYSTRATEGY_PATH), "w", encoding="utf-8") as f:
         json.dump(ms, f, ensure_ascii=False)
 
 
 def load_my_strategy() -> Optional[dict]:
     try:
-        with open(MYSTRATEGY_PATH, "r", encoding="utf-8") as f:
+        with open(_up(MYSTRATEGY_PATH), "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return None
@@ -564,7 +579,7 @@ def load_my_strategy() -> Optional[dict]:
 
 def my_strategy_mtime() -> float:
     try:
-        return os.path.getmtime(MYSTRATEGY_PATH)
+        return os.path.getmtime(_up(MYSTRATEGY_PATH))
     except OSError:
         return 0.0
 

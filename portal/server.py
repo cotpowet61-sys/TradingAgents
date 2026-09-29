@@ -73,6 +73,9 @@ async def health():
         "demo_mode": settings.is_demo(),
         "bybit_keys": settings.has_bybit_keys(),
         "live": get_engine().state(),
+        "brand": settings.BRAND_NAME,
+        "telegram": settings.TELEGRAM_URL,
+        "price_month": settings.PRICE_MONTH_USD,
     }
 
 

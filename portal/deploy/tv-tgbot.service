@@ -1,0 +1,18 @@
+[Unit]
+Description=TradeVision Telegram bot (funnel + traffickers)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tradevision
+WorkingDirectory=/srv/tradevision/portal
+ExecStart=/srv/tradevision/venv/bin/python tg_bot.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
