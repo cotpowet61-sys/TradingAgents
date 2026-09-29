@@ -32,6 +32,16 @@ nav{display:flex;align-items:center;gap:18px;padding:10px 0}
 .btn.ghost{background:transparent;border:1px solid rgba(255,255,255,.18);color:var(--tx)}
 /* ---------- hero ---------- */
 .hero{position:relative;text-align:left;padding:84px 0 40px;max-width:780px}
+.hero-grid{display:grid;grid-template-columns:1.05fr .95fr;gap:30px;max-width:none;align-items:center}
+.hero-text{position:relative;max-width:640px}
+.brain-wrap{position:relative;height:520px}
+#brain{width:100%;height:100%}
+.livechip{position:absolute;top:8px;left:50%;transform:translateX(-50%);background:rgba(255,60,80,.12);border:1px solid rgba(255,90,110,.35);color:#ff8a97;font-size:11px;font-weight:700;padding:4px 12px;border-radius:999px;z-index:2;animation:blink 2s infinite}
+.agent-chips{position:absolute;inset:0;pointer-events:none}
+.achip{position:absolute;background:rgba(10,13,12,.88);border:1px solid var(--line);border-left:3px solid var(--ac,#5ee6a8);border-radius:10px;padding:8px 11px;font-size:10.5px;color:var(--mut);backdrop-filter:blur(5px);max-width:190px;animation:float 6s ease-in-out infinite}
+.achip b{display:block;color:var(--tx);font-size:11px;font-weight:600;margin:2px 0}
+.achip .st-complete{color:var(--ok)}.achip .st-run{color:#ffd278}
+.achip .zone{color:var(--ac,#5ee6a8);font-weight:700;font-size:9.5px;letter-spacing:.08em}
 .eyebrow{display:inline-flex;align-items:center;gap:8px;background:rgba(94,230,168,.08);border:1px solid rgba(94,230,168,.25);color:var(--ok);font-size:12.5px;padding:6px 14px;border-radius:999px;margin-bottom:22px}
 .eyebrow s{width:7px;height:7px;border-radius:50%;background:var(--ok);animation:blink 1.4s infinite}
 @keyframes blink{50%{opacity:.2}}
@@ -97,6 +107,7 @@ footer{border-top:1px solid var(--line);margin-top:60px;padding:26px 0 40px;colo
 .modal input{width:100%;margin:6px 0;padding:12px 14px;border-radius:12px;border:1px solid var(--line);background:#0a0d0c;color:var(--tx);font-size:14px}
 .err{color:var(--bad);font-size:12.5px;min-height:16px;margin:6px 0}
 @media(max-width:900px){.c6,.c4,.c8{grid-column:span 12}.feat{grid-template-columns:1fr}
+.hero-grid{grid-template-columns:1fr}.brain-wrap{display:none}
 .hero-chips{display:none}.chips{display:none}}
 </style>
 </head>
@@ -115,16 +126,23 @@ footer{border-top:1px solid var(--line);margin-top:60px;padding:26px 0 40px;colo
     <a class="btn" href="#" onclick="openAuth('signup');return false">Create Account</a>
   </nav>
 
-  <section class="hero">
-    <div class="hero-chips" id="heroChips"></div>
-    <span class="eyebrow"><s></s> LIVE SCANNER · signals verified on-chain of time</span>
-    <h1>Your signals keep lying to you.<br><em>Ours learn from every trade.</em></h1>
-    <p class="sub">A neural trading coach that scans 20+ strategies in real time, blocks the setups that lose <b>your</b> money, and calculates the exact position size for your deposit. Fully verified public track record — every signal logged, nothing edited retroactively.</p>
-    <div class="cta-row">
-      <a class="btn" href="#" onclick="openAuth('signup');return false" style="font-size:16px;padding:15px 30px">Get instant access — $100/mo</a>
-      <a class="btn ghost" href="#track">See the verified track ↓</a>
+  <section class="hero hero-grid">
+    <div class="hero-text">
+      <div class="hero-chips" id="heroChips"></div>
+      <span class="eyebrow"><s></s> LIVE SCANNER · signals verified on-chain of time</span>
+      <h1>Your signals keep lying to you.<br><em>Ours learn from every trade.</em></h1>
+      <p class="sub">A neural trading coach that scans 20+ strategies in real time, blocks the setups that lose <b>your</b> money, and calculates the exact position size for your deposit. Fully verified public track record — every signal logged, nothing edited retroactively.</p>
+      <div class="cta-row">
+        <a class="btn" href="#" onclick="openAuth('signup');return false" style="font-size:16px;padding:15px 30px">Get instant access — $100/mo</a>
+        <a class="btn ghost" href="#track">See the verified track ↓</a>
+      </div>
+      <p class="micro">USDT (TRC20 / BEP20) · access activates automatically in 1–2 minutes · no card, no KYC · cancel anytime</p>
     </div>
-    <p class="micro">USDT (TRC20 / BEP20) · access activates automatically in 1–2 minutes · no card, no KYC · cancel anytime</p>
+    <div class="brain-wrap">
+      <div class="livechip">🔴 LIVE</div>
+      <canvas id="brain"></canvas>
+      <div class="agent-chips" id="agentChips"></div>
+    </div>
   </section>
 
   <div class="strip">
@@ -174,6 +192,7 @@ footer{border-top:1px solid var(--line);margin-top:60px;padding:26px 0 40px;colo
     <div class="card"><div class="ic">🤖</div><h3>5 AI agents on demand</h3><p>Strategist, momentum, contrarian, macro and a risk officer debate the setup when you ask. You control the spend — AI never runs wild on your bill.</p></div>
     <div class="card"><div class="ic">💵</div><h3>Exact position sizing</h3><p>Every signal ships with quantity, margin, $-risk and $-target for YOUR deposit and leverage. One wrong 20x liquidation costs more than months of access — sizing is the survival kit.</p></div>
     <div class="card"><div class="ic">📊</div><h3>Backtest before trust</h3><p>Validate any strategy on any historical range first. If a tactic can't prove itself on data, it never reaches your screen.</p></div>
+    <div class="card"><div class="ic">🔬</div><h3>Quant research inside</h3><p>RSI/ATR/volume regimes, Kalman-style smoothing on noisy entries, MAE/MFE journey of every trade — the same math props pay quants for, distilled into readable cards.</p></div>
     <div class="card"><div class="ic">🔒</div><h3>Read-only by design</h3><p>We accept only Read-Only exchange keys — validated at save. We can't touch your funds even if hacked; keys are encrypted AES-256 at rest.</p></div>
   </section>
 
@@ -265,6 +284,18 @@ function fill(){
   let i=0;
   const push=()=>{if(!items.length)return;$('pulseFeed').innerHTML=items.slice(0,i+1).map(x=>`<div>${x.t} — ${x.html}</div>`).join('');i=(i+1)%Math.min(8,items.length);};
   push();setInterval(push,2600);
+  // agent task chips у мозга (из реальных исходов)
+  const AC=['#4da3ff','#ff6b7a','#b892ff','#5ee6a8','#ffd278'];
+  const AZN=['STRATEGIST','MOMENTUM','CONTRARIAN','MACRO','RISK OFFICER'];
+  const ATX=t.last.slice(0,5).map((e,i)=>({
+    zone:'AGENT-0'+(i+1)+' · '+AZN[i%5],col:AC[i%5],
+    task:(e.result==='WIN'?'Holding '+e.symbol+' '+e.side+' bias':'Cutting '+e.symbol+' '+e.side+' exposure'),
+    st:e.result==='WIN'?'✓ complete':'⏳ '+e.pnl_pct+'%' ,cls:e.result==='WIN'?'st-complete':'st-run'}));
+  const AP=[{top:'2%',left:'2%'},{top:'24%',right:'0%'},{top:'48%',left:'0%'},{top:'70%',right:'3%'},{bottom:'2%',left:'8%'}];
+  $('agentChips').innerHTML=ATX.map((a,i)=>{
+    const p=AP[i];const pos=Object.entries(p).map(([k,v])=>k+':'+v).join(';');
+    return `<div class="achip" style="${pos};--ac:${a.col};animation-delay:${i*.9}s">
+      <span class="zone" style="color:${a.col}">${a.zone}</span><b>${a.task}</b><span class="${a.cls}">${a.st}</span></div>`;}).join('');
   // hero chips
   const chips=t.last.slice(0,4);
   const pos=[{top:'8%',right:'4%'},{top:'34%',right:'14%'},{top:'60%',right:'2%'},{top:'86%',right:'18%'}];
@@ -289,6 +320,60 @@ async function doAuth(){
   if(!r.ok){$('authErr').textContent=d.detail||'something went wrong';return;}
   location='/pay.html';
 }
+/* ---------- agent-brain (hero right): 5 цветных кластеров-ролей ---------- */
+(function(){
+  const bc=$('brain');if(!bc)return;const bctx=bc.getContext('2d');
+  const COLORS=['#4da3ff','#ff6b7a','#b892ff','#5ee6a8','#ffd278'];
+  const ZONES=['STRATEGIST','MOMENTUM','CONTRARIAN','MACRO','RISK OFFICER'];
+  const C=[{x:.5,y:.32,rx:.30,ry:.22},{x:.26,y:.55,rx:.20,ry:.18},
+           {x:.74,y:.55,rx:.20,ry:.18},{x:.38,y:.80,rx:.18,ry:.15},{x:.62,y:.80,rx:.18,ry:.15}];
+  let BW,BH,NB=[],PB=[],T0=performance.now();
+  function rsb(){const r=bc.getBoundingClientRect();BW=bc.width=r.width*2;BH=bc.height=r.height*2;
+    NB=[];C.forEach((c,ci)=>{const cx=c.x*BW,cy=c.y*BH,rx=c.rx*BW,ry=c.ry*BH;
+      for(let i=0;i<16;i++){const a=Math.random()*7,r2=Math.sqrt(Math.random());
+        NB.push({c:ci,x:cx+Math.cos(a)*r2*rx*.9,y:cy+Math.sin(a)*r2*ry*.9,
+          vx:(Math.random()-.5)*.22,vy:(Math.random()-.5)*.22,s:1.5+Math.random()*3,
+          cx,cy,rx,ry});}});}
+  function brainLinks(){const L=[];for(let i=0;i<NB.length;i++)for(let j=i+1;j<NB.length;j++){
+    const a=NB[i],b=NB[j],dx=a.x-b.x,dy=a.y-b.y,d=dx*dx+dy*dy;
+    const R=a.c===b.c?105:150;if(d<R*R*2.2)L.push([i,j,d,a.c===b.c]);}return L;}
+  rsb();addEventListener('resize',rsb);
+  window.BRAIN_COLORS=COLORS;window.BRAIN_ZONES=ZONES;
+  (function loop(){
+    bctx.clearRect(0,0,BW,BH);
+    const t=(performance.now()-T0)/1000;
+    // мягкие «тела» кластеров
+    C.forEach((c,ci)=>{const g=bctx.createRadialGradient(c.x*BW,c.y*BH,10,c.x*BW,c.y*BH,c.rx*BW*1.15);
+      g.addColorStop(0,COLORS[ci]+'14');g.addColorStop(1,'transparent');
+      bctx.fillStyle=g;bctx.beginPath();bctx.ellipse(c.x*BW,c.y*BH,c.rx*BW*1.15,c.ry*BH*1.15,0,0,7);bctx.fill();});
+    NB.forEach(n=>{n.x+=n.vx;n.y+=n.vy;
+      const dx=(n.x-n.cx)/(n.rx*.9),dy=(n.y-n.cy)/(n.ry*.9);
+      if(dx*dx+dy*dy>1){n.vx-=(n.x-n.cx)*.0006;n.vy-=(n.y-n.cy)*.0006;}});
+    const L=brainLinks();
+    if(Math.random()<.25&&L.length)PB.push({l:L[Math.floor(Math.random()*L.length)],p:0});
+    L.forEach(([i,j,d,intra])=>{const a=NB[i],b=NB[j];
+      bctx.strokeStyle=COLORS[a.c]+(intra?'30':'18');
+      bctx.beginPath();bctx.moveTo(a.x,a.y);bctx.lineTo(b.x,b.y);bctx.stroke();});
+    PB=PB.filter(p=>p.p<=1);
+    PB.forEach(pu=>{pu.p+=.022;const[i,j]=pu.l;const a=NB[i],b=NB[j];
+      const x=a.x+(b.x-a.x)*pu.p,y=a.y+(b.y-a.y)*pu.p;
+      bctx.fillStyle=COLORS[a.c];bctx.shadowColor=COLORS[a.c];bctx.shadowBlur=14;
+      bctx.beginPath();bctx.arc(x,y,3.4,0,7);bctx.fill();bctx.shadowBlur=0;});
+    NB.forEach(n=>{const puls=.75+.25*Math.sin(t*2.2+n.c*1.7+n.x*.01);
+      bctx.fillStyle=COLORS[n.c];bctx.globalAlpha=.5+.4*puls;
+      bctx.beginPath();bctx.arc(n.x,n.y,n.s*puls*1.6,0,7);bctx.fill();bctx.globalAlpha=1;});
+    // подписи зон как в видео-референсе
+    C.forEach((c,ci)=>{const fire=(0.4+0.5*Math.abs(Math.sin(t*.9+ci*2))).toFixed(1);
+      bctx.fillStyle=COLORS[ci];bctx.font=`700 ${11*2}px Inter,system-ui`;bctx.textAlign='center';
+      bctx.globalAlpha=.95;
+      bctx.fillText(ZONES[ci],c.x*BW,c.y*BH-c.ry*BH-14);
+      bctx.fillStyle='rgba(255,255,255,.45)';bctx.font=`500 ${9*2}px Inter,system-ui`;
+      bctx.fillText(`${14+ci*7} neurons · firing ${fire}s`,c.x*BW,c.y*BH-c.ry*BH+4);
+      bctx.globalAlpha=1;});
+    requestAnimationFrame(loop);
+  })();
+})();
+
 /* ---------- neural background: pulsing network ---------- */
 const cv=$('neuro'),cx2=cv.getContext('2d');let W,H,N=[],PULSES=[];
 function rs(){W=cv.width=innerWidth;H=cv.height=innerHeight;
