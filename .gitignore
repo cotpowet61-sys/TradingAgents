@@ -36,3 +36,8 @@ image-search/
 portal/.env
 portal/data/
 .venv-portal/
+
+# Тестовое окружение портала
+.venv-test/
+portal/.venv-test/
+.pytest_cache/

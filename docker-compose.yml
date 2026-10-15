@@ -23,3 +23,24 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
+
+  # --- TradeVision Portal (SaaS: подписка, кабинет, сигналы) ---------------
+  portal:
+    build:
+      context: .
+      dockerfile: portal/Dockerfile
+    ports:
+      - "3005:3005"
+    volumes:
+      - ./portal/data:/data
+    env_file:
+      - ./portal/.env          # заполните по portal/.env.example
+    environment:
+      # TRUST_PROXY_HEADERS=false — если публикуете порт напрямую, без reverse-proxy
+      TRUST_PROXY_HEADERS: "true"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3005/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

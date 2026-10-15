@@ -83,6 +83,19 @@ document.querySelectorAll('#nav button').forEach(b => {
 });
 
 /* ---------- WebSocket ---------- */
+// Источник данных: если биржа недоступна — сигналы не идут (честно показываем это)
+function renderDataStatus(d) {
+    const el = $('data-badge');
+    if (!el) return;
+    if (d && d.trading === false) {
+        el.textContent = '⚠️ Биржа недоступна: сигналы приостановлены (источник: ' + (d.source || '?') + ')';
+        el.className = 'badge-src warn';
+    } else {
+        el.textContent = '🟢 Данные биржи: ' + ((d && d.source) || 'bybit');
+        el.className = 'badge-src ok';
+    }
+}
+
 function connectWS() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/ws`);
@@ -99,8 +112,11 @@ function connectWS() {
             state.prices = d.prices || {};
             state.feed = d.feed || [];
             renderWatchlist(); renderFeed();
+        } else if (d.type === 'data_status') {
+            renderDataStatus(d);
         } else if (d.type === 'prices') {
             state.prices = d.prices || state.prices;
+            if (d.source) renderDataStatus({source: d.source, trading: d.source === 'bybit'});
             renderWatchlist();
         } else if (d.type === 'signal_close') {
             // исход живого сигнала: TP / SL / таймаут / разворот

@@ -9,20 +9,26 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings
 
 PORTAL_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(PORTAL_DIR)
-ENV_PATH = os.path.join(PORTAL_DIR, ".env")
+# Путь .env можно переопределить (тесты, второй инстанс, контейнер с volume).
+ENV_PATH = os.environ.get("PORTAL_ENV_FILE") or os.path.join(PORTAL_DIR, ".env")
 ENV_EXAMPLE_PATH = os.path.join(PORTAL_DIR, ".env.example")
-DATA_DIR = os.path.join(PORTAL_DIR, "data")
+# Каталог данных (БД, журналы, кэши) можно вынести (тесты, контейнер, отдельный диск).
+DATA_DIR = os.environ.get("PORTAL_DATA_DIR") or os.path.join(PORTAL_DIR, "data")
 
 
 class PortalSettings(BaseSettings):
     # ------------------------------------------------------------------ #
     # Сервер
     # ------------------------------------------------------------------ #
-    PORTAL_HOST: str = "0.0.0.0"
+    # По умолчанию слушаем ТОЛЬКО localhost: наружу портал отдаёт reverse-proxy
+    # (Caddy в deploy/). Прямое выставление в интернет = осознанное решение:
+    # тогда обязательно TRUST_PROXY_HEADERS=false (см. комментарий у флага).
+    PORTAL_HOST: str = "127.0.0.1"
     PORTAL_PORT: int = 3005
 
     # ------------------------------------------------------------------ #
@@ -111,6 +117,14 @@ class PortalSettings(BaseSettings):
     VOL_SEASON_BLOCK: str = ""
     # Запретные диапазоны ATR% входа: "0.6-1.0". Пусто = не режем.
     ATR_PCT_BLOCK: str = ""
+    # Лестница интервалов сканирования (сек) через запятую: 30,60,90.
+    # Пусто = фиксированный SCAN_INTERVAL_SECONDS. Все настройки читаются
+    # напрямую через поле — getattr-дефолт молча игнорировал бы .env.
+    SCAN_CADENCE_SECONDS: str = ""
+    TFS_PER_TICK: int = 1             # сколько ТФ смотреть за один проход (ротация)
+    # Не выдавать сигналы/исходы, если биржа недоступна и данные синтетические:
+    # «учебный» график не должен попадать ни в ленту, ни в обучение, ни в публичный трек.
+    REQUIRE_REAL_DATA: bool = True
     # Запретные часы входа (UTC) через запятую: "3,11,19". Пусто = не режем.
     HOURS_BLOCK: str = ""
     # Breakeven: при движении в прибыль на BE_TRIGGER_PCT% стоп → вход + BE_OFFSET_PCT%.
@@ -139,18 +153,52 @@ class PortalSettings(BaseSettings):
     TELEGRAM_URL: str = ""           # канал поддержки/комьюнити
     # Администрирование SaaS (только серверные, НЕ светятся в public())
     ADMIN_TOKEN: str = ""            # токен админ-API (партнёры/стата/выплаты)
+    SITE_URL: str = ""               # домен фронта (для ссылок/бота/Origin-проверки)
     # Владельцы продукта: email(ы) через запятую — у них подписка всегда активна,
     # оплата не требуется, доступ ко всему продукту сразу после входа.
     OWNER_EMAILS: str = ""
     TG_BOT_TOKEN: str = ""           # токен TG-бота (@BotFather) — бот+уведомления о платежах
     ADMIN_TG_ID: str = ""            # ваш числовой telegram id (кому слать оповещения)
     # Секрет подписи сессий. Если пуст — генерируется один раз и пишется в .env.
-    AUTH_SECRET: str = ""            # env PORTAL_AUTH_SECRET
+    # В .env/деплое переменная исторически называется PORTAL_AUTH_SECRET, а поле —
+    # AUTH_SECRET. Без явного алиаса значение из .env НЕ читалось: секрет генерировался
+    # заново при каждом старте, и ключи клиентов становились нерасшифровываемыми.
+    AUTH_SECRET: str = Field(default="", validation_alias=AliasChoices(
+        "AUTH_SECRET", "PORTAL_AUTH_SECRET"))
     # Community-AI (SaaS): бесплатный провайдер для юзеров без своего ключа.
     # OpenRouter совместим с OpenAI API; ":free" модели стоят $0.
     FREE_AI_BASE_URL: str = "https://openrouter.ai/api/v1"
     FREE_AI_KEY: str = ""            # ключ OpenRouter (серверный, НЕ в public)
     FREE_AI_MODEL: str = "meta-llama/llama-3.3-70b-instruct:free"
+
+    # ------------------------------------------------------------------ #
+    # Безопасность / эксплуатация
+    # ------------------------------------------------------------------ #
+    SECURITY_HEADERS: bool = True     # CSP/nosniff/referrer-policy/frame-ancestors
+    CSRF_ORIGIN_CHECK: bool = True    # небезопасные методы только с нашего Origin
+    HSTS_ENABLED: bool = True         # Strict-Transport-Security (только за HTTPS)
+    # Доверять X-Forwarded-For/Host можно ТОЛЬКО когда впереди свой прокси (Caddy).
+    # Портал, выставленный в интернет напрямую, обязан иметь false — иначе IP и
+    # rate-limit подделываются заголовком.
+    TRUST_PROXY_HEADERS: bool = True
+    UNSAFE_LOCAL: bool = False        # аварийный флаг: разрешить небезопасные конфигурации (только локально!)
+    FRAME_ANCESTORS: str = "'self'"   # CSP frame-ancestors (напр. "'self' https://partner.example")
+    ALLOWED_ORIGINS: str = ""         # доп. Origin'ы через запятую (партнёрские превью-домены)
+    MAX_BODY_MB: float = 12.0         # лимит тела запроса (CSV сделок идёт одним куском)
+    REQUIRE_SUB_FOR_AI: bool = True   # AI-эндпоинты недоступны без активной подписки (SaaS)
+    # Подтверждение «кошелёк — только публичный адрес»: контур осознанно watch-only,
+    # приватных ключей/seed на сервере быть не должно.
+    TRC20_WATCH_ONLY_ACK: bool = False
+    # Фоновый сканер можно выключить (тесты, CI, отдельный воркер-сканер).
+    LIVE_SCANNER: bool = True
+    # Наблюдатель за блокчейном (подтверждение оплат) — можно вынести в отдельный процесс.
+    BILLING_WATCHER: bool = True
+
+    # ---- Бэктест (анти-DoS: тяжёлые прогоны ограничены) ----
+    BACKTEST_MAX_DAYS: int = 180      # максимум истории на один прогон
+    BACKTEST_MAX_SYMBOLS: int = 6
+    BACKTEST_MAX_TFS: int = 3
+    BACKTEST_TIMEOUT_SEC: int = 180   # общий таймаут прогона
 
     # Правила дэйтрейдинга (для отображения и контекста агентов)
     # 0 = без лимита (пользователь снял границу 30/день).
@@ -426,6 +474,51 @@ def ensure_env_file() -> None:
         print(f"[portal-config] создан .env: {ENV_PATH}")
     except Exception as e:
         print(f"[portal-config] не удалось создать .env: {e}")
+
+
+# ---------------------------------------------------------------------- #
+# Проверка боевой конфигурации (вызывается на старте сервера)
+# ---------------------------------------------------------------------- #
+def validate_startup(s: "PortalSettings") -> tuple[list[str], list[str]]:
+    """→ (ошибки, предупреждения).
+
+    Ошибка = конфигурация физически не может работать или небезопасна;
+    сервер откажется стартовать (кроме явного UNSAFE_LOCAL=true — для локальной
+    разработки). Предупреждение = продукт запустится, но часть функций молчит.
+    """
+    err: list[str] = []
+    warn: list[str] = []
+
+    if s.SAAS_MODE:
+        if not (s.AUTH_SECRET or "").strip() or len(s.AUTH_SECRET.strip()) < 24:
+            err.append("PORTAL_AUTH_SECRET пуст/короткий — сессии и шифрование ключей клиентов невозможны")
+        if not (s.ADMIN_TOKEN or "").strip():
+            err.append("ADMIN_TOKEN не задан — админ-API (партнёры/выплаты) недоступен")
+        if not ((s.WALLET_TRC20 or "").strip() or (s.WALLET_BEP20 or "").strip()):
+            err.append("Не задан ни один кошелёк приёма (WALLET_TRC20/WALLET_BEP20) — оплата невозможна, "
+                       "а SAAS_MODE=true закроет доступ к терминалу до оплаты")
+        if not (s.SITE_URL or "").strip():
+            warn.append("SITE_URL не задан — ссылки в TG-боте и Origin-проверка будут неполными")
+        if not (s.TELEGRAM_URL or "").strip():
+            warn.append("TELEGRAM_URL не задан — кнопка поддержки на лендинге/в кабинете не появится")
+        if not any(s.role_model(r)["api_key"] for r in s.ROLE_KEYS) and not (s.FREE_AI_KEY or "").strip():
+            warn.append("Нет ни одного AI-ключа — агенты будут отвечать демо-вердиктами (продукт продаётся с AI!)")
+        if (s.WALLET_TRC20 or "").strip() and not s.TRC20_WATCH_ONLY_ACK:
+            warn.append("WALLET_TRC20 задан: подтвердите, что это ПУБЛИЧНЫЙ адрес приёма, и поставьте "
+                        "TRC20_WATCH_ONLY_ACK=true (приватные ключи на сервере хранить нельзя)")
+    return err, warn
+
+
+def enforce_startup(s: "PortalSettings") -> None:
+    err, warn = validate_startup(s)
+    for w in warn:
+        print(f"[portal-config] ⚠️  {w}")
+    if err:
+        msg = "Конфигурация не готова к боевому запуску:\n  - " + "\n  - ".join(err)
+        if s.UNSAFE_LOCAL:
+            print(f"[portal-config] ⚠️  UNSAFE_LOCAL=true: запускаюсь несмотря на проблемы\n{msg}")
+            return
+        raise RuntimeError(msg + "\n(исправьте portal/.env или выставьте UNSAFE_LOCAL=true для локальной отладки)")
 
 
 settings = PortalSettings()

@@ -12,9 +12,11 @@ import sys
 import time
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Body
+from fastapi import (FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query,
+                     Body, Request)
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
+from fastapi.responses import (FileResponse, StreamingResponse, JSONResponse,
+                               HTMLResponse)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -22,7 +24,9 @@ PORTAL_DIR = os.path.dirname(os.path.abspath(__file__))
 if PORTAL_DIR not in sys.path:
     sys.path.insert(0, PORTAL_DIR)
 
-from portal_config import settings, ensure_env_file, ENV_PATH          # noqa: E402
+from portal_config import (settings, ensure_env_file, enforce_startup,   # noqa: E402
+                           ENV_PATH, DATA_DIR)
+import security                                                            # noqa: E402
 from council import (build_snapshot, get_verdict, view, consensus,     # noqa: E402
                      get_market, COUNCIL_ROLES, role_meta)              # noqa: E402
 from llm_client import list_models, test_role, chat, LLMError          # noqa: E402
@@ -32,8 +36,19 @@ from live_engine import get_engine                                     # noqa: E
 
 STATIC_DIR = os.path.join(PORTAL_DIR, "static")
 
-app = FastAPI(title="TradeVision Portal", version="1.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app = FastAPI(title="TradeVision Portal", version="1.1", docs_url=None, redoc_url=None,
+              openapi_url=None)   # схемы наружу не отдаём: это внутренний API
+
+# CORS нужен ТОЛЬКО если UI живёт на другом домене (партнёрское превью и т.п.).
+# Открывать «*» при cookie-сессиях нельзя: это разрешает чужому сайту читать
+# ответы от имени залогиненного пользователя.
+_allowed = [o.strip().rstrip("/") for o in
+            ((settings.ALLOWED_ORIGINS or "") + "," + (settings.SITE_URL or "")).split(",")
+            if o.strip().startswith("http")]
+if _allowed:
+    app.add_middleware(CORSMiddleware, allow_origins=sorted(set(_allowed)),
+                       allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # SaaS-режим (аккаунты/подписка/трек) — активен только при SAAS_MODE=true в .env
@@ -41,16 +56,26 @@ try:
     import saas_routes as _saas
     _saas.mount(app, settings, STATIC_DIR)
 except Exception as _e:  # модуль опционален — портал не должен падать из-за него
+    if settings.SAAS_MODE:
+        raise      # в боевом режиме «тихо без SaaS» = открытый доступ ко всему продукту
     import logging as _lg
     _lg.getLogger("portal.server").warning("[saas] mount skipped: %s", _e)
+
+# Заголовки безопасности + Origin-проверка + лимит тела: внешний слой.
+security.install(app, settings)
 
 
 @app.on_event("startup")
 async def _startup():
     ensure_env_file()
-    os.makedirs(os.path.join(PORTAL_DIR, "data"), exist_ok=True)
-    get_engine().start()
-    print(f"[portal] TradeVision запущен → http://localhost:{settings.PORTAL_PORT}")
+    os.makedirs(DATA_DIR, exist_ok=True)
+    enforce_startup(settings)          # боевая конфигурация проверяется до приёма трафика
+    if settings.LIVE_SCANNER:
+        get_engine().start()
+    else:
+        print("[portal] фоновый сканер выключен (LIVE_SCANNER=false)")
+    print(f"[portal] TradeVision запущен → http://localhost:{settings.PORTAL_PORT}"
+          f"{'  [SAAS_MODE]' if settings.SAAS_MODE else ''}")
 
 
 @app.on_event("shutdown")
@@ -84,10 +109,19 @@ async def index_page():
 
 @app.get("/api/health")
 async def health():
+    try:
+        from data.market_data import data_status
+        market = data_status().get("source")
+    except Exception:
+        market = "unknown"
     return {
         "ok": True,
+        "version": app.version,
+        "saas": bool(settings.SAAS_MODE),
         "demo_mode": settings.is_demo(),
         "bybit_keys": settings.has_bybit_keys(),
+        "market_source": market,
+        "real_data_required": bool(settings.REQUIRE_REAL_DATA),
         "live": get_engine().state(),
         "brand": settings.BRAND_NAME,
         "telegram": settings.TELEGRAM_URL,
@@ -214,7 +248,8 @@ async def portfolio_overview(days: int = 90, full: bool = False,
         "agents_enabled": settings.role_enabled("portfolio"),
         "cache": {"mode": data.get("cache", "csv" if data["source"] == "csv" else "full"),
                   "added": data.get("cache_added", 0),
-                  "total": data.get("cache_total", data["count"])},
+                  "total": data.get("cache_total", data["count"]),
+                  "truncated": bool(data.get("truncated"))},
     }
 
 
@@ -255,9 +290,10 @@ async def my_strategy_build(days: int = 90, from_ts: int = 0, to_ts: int = 0):
 
 @app.post("/api/portfolio/csv")
 async def portfolio_csv(text: str = Body(..., media_type="text/plain")):
-    if len(text) > 8_000_000:
-        raise HTTPException(413, "Файл слишком большой (>8 МБ)")
-    res = ta_mod.save_csv(text)
+    limit = int(float(settings.MAX_BODY_MB) * 1024 * 1024)
+    if len(text) > limit:
+        raise HTTPException(413, f"Файл слишком большой (>{limit // (1024*1024)} МБ)")
+    res = await ta_mod.save_csv_async(text)
     if res["count"] == 0:
         res["hint"] = ("Сделки не распознаны. Нужен CSV из Bybit: Orders → Trade History "
                        "(или Position History) → Export. Убедитесь, что файл не Excel (.xlsx).")
@@ -459,6 +495,52 @@ async def models():
 # ---------------------------------------------------------------------- #
 # Live
 # ---------------------------------------------------------------------- #
+@app.get("/api/metrics")
+async def metrics(request: Request):
+    """Сводка состояния сервиса для владельца/мониторинга (без секретов).
+
+    Доступ: admin-токен, либо (в SaaS) владелец продукта по активной сессии.
+    """
+    ok = False
+    tok = request.headers.get("x-admin-token", "") or ""
+    if tok and security.safe_eq(tok, str(settings.ADMIN_TOKEN or "")):
+        ok = True
+    if not ok and settings.SAAS_MODE:
+        try:
+            import authn as _a
+            u = _a.user_by_token(request.cookies.get(_a.COOKIE))
+            ok = bool(u and _a.is_owner(u))
+        except Exception:
+            ok = False
+    if not ok:
+        raise HTTPException(403, "forbidden")
+    try:
+        from data.market_data import data_status
+        market = data_status()
+    except Exception:
+        market = {}
+    db_stats = {}
+    try:
+        for key, sql in (("users", "SELECT COUNT(*) n FROM users"),
+                         ("active_subs", "SELECT COUNT(*) n FROM users WHERE sub_until_ms>?"),
+                         ("invoices_pending", "SELECT COUNT(*) n FROM invoices WHERE status='pending'"),
+                         ("paid", "SELECT COUNT(*) n FROM paid_tx")):
+            import db as _db
+            params = (int(time.time() * 1000),) if "?" in sql else ()
+            db_stats[key] = (_db.q(sql, params, one=True) or {}).get("n", 0)
+    except Exception:
+        pass
+    return {
+        "ok": True,
+        "version": app.version,
+        "saas": bool(settings.SAAS_MODE),
+        "market": market,
+        "live": get_engine().state(),
+        "db": db_stats,
+        "ts": int(time.time() * 1000),
+    }
+
+
 @app.get("/api/live/state")
 async def live_state():
     eng = get_engine()
@@ -555,9 +637,16 @@ async def signals_backtest(payload: dict = Body(default={})):
         symbols = [s.strip() for s in symbols.split(",") if s.strip()]
     if isinstance(tfs, str):
         tfs = [t.strip() for t in tfs.split(",") if t.strip()]
-    days = max(1, min(days, 180))
+    # Анти-DoS: прогон тянет историю по каждой паре монета×ТФ — ограничиваем объём.
+    symbols = [s.upper() for s in symbols][: int(settings.BACKTEST_MAX_SYMBOLS)]
+    tfs = tfs[: int(settings.BACKTEST_MAX_TFS)]
+    days = max(1, min(days, int(settings.BACKTEST_MAX_DAYS)))
     try:
-        return await run_signal_backtest(symbols, tfs, days)
+        return await asyncio.wait_for(run_signal_backtest(symbols, tfs, days),
+                                      timeout=float(settings.BACKTEST_TIMEOUT_SEC))
+    except asyncio.TimeoutError:
+        raise HTTPException(504, f"Бэктест дольше {int(settings.BACKTEST_TIMEOUT_SEC)} с — "
+                                 f"уменьшите число монет/таймфреймов или период")
     except BacktestError as e:
         raise HTTPException(400, str(e))
 

@@ -1,15 +1,49 @@
 # TradeVision — Caddy reverse proxy (auto-HTTPS за 1 минуту).
 # Замените your-domain.com на свой домен; DNS A-запись → IP VPS должна быть готова ДО запуска.
+#
+# Замечания по безопасности:
+#  • портал слушает только 127.0.0.1 — наружу торчит лишь Caddy;
+#  • X-Forwarded-* заголовки ставит Caddy сам, а портал им доверяет
+#    (TRUST_PROXY_HEADERS=true). Если убрать прокси — обязательно поставьте false;
+#  • rate_limit — грубая защита от флуда до FastAPI (тонкие лимиты — в коде).
 
 your-domain.com {
     encode zstd gzip
     reverse_proxy 127.0.0.1:3005
 
-    # базовые заголовки безопасности (X-Frame-Options осознанно НЕ ставим:
-    # превью-стенды/лендинги партнёров могут фреймить)
+    # Базовая защита от перебора/флуда на уровне прокси.
+    # Требует Caddy с модулем rate_limit; если модуля нет — закомментируйте блок.
+    # rate_limit {
+    #     zone auth {
+    #         key {remote_host}
+    #         events 60
+    #         window 1m
+    #     }
+    # }
+
+    # Лимит размера тела (портал принимает CSV сделок до ~12 МБ)
+    request_body {
+        max_size 16MB
+    }
+
     header {
         X-Content-Type-Options nosniff
         Referrer-Policy strict-origin-when-cross-origin
         -Server
+        # HSTS ставит и сам портал при x-forwarded-proto=https
+    }
+
+    # Логи в файл (ротация — Caddy сам)
+    log {
+        output file /var/log/caddy/tradevision.log {
+            roll_size 20mb
+            roll_keep 10
+        }
     }
 }
+
+# Отдельный поддомен-зеркало для партнёрских превью (если нужно встраивание в iframe
+# на чужом домене): портал по умолчанию отдаёт frame-ancestors 'self'.
+# partner.your-domain.com {
+#     reverse_proxy 127.0.0.1:3005
+# }

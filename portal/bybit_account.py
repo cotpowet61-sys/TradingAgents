@@ -7,6 +7,7 @@ Read-only). Платформа никогда не отправляет торг
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import time
@@ -187,26 +188,61 @@ async def fetch_closed_pnl(days: int = 90, category: str = "linear", max_pages: 
     return await _fetch_windowed("/v5/position/closed-pnl", days, category, max_pages)
 
 
-async def _fetch_windowed(path: str, days: int, category: str, max_pages_per_window: int) -> List[dict]:
+# Признак того, что у пользователя больше истории, чем мы выкачали за проход:
+# статистика тогда неполная и об этом надо честно сказать в UI.
+_TRUNCATED = False
+
+
+def last_truncated() -> bool:
+    return bool(_TRUNCATED)
+
+
+async def _fetch_windowed(path: str, days: int, category: str,
+                          max_pages_per_window: int = 20) -> List[dict]:
+    """История окнами по 6.9 дня. Окна идут ПАРАЛЛЕЛЬНО (ограниченно).
+
+    Раньше 13 окон × до 10 страниц шли строго друг за другом: 180 дней истории
+    = сотни секунд и таймаут деплой-прокси (Caddy). Теперь окна независимы —
+    у каждого свои startTime/endTime — поэтому запускаем их батчами.
+    """
+    global _TRUNCATED
     days = max(1, min(days, 400))
     end = int(time.time() * 1000)
     start_all = end - days * 86_400_000
     win = int(6.9 * 86_400_000)  # чуть меньше лимита Bybit (7 дней)
-    out: List[dict] = []
+
+    windows = []
     w_end = float(end)
     while w_end > start_all:
         w_start = max(float(start_all), w_end - win)
-        cursor = None
-        for _ in range(max_pages_per_window):
-            res = await _get(path, {
-                "category": category, "startTime": int(w_start), "endTime": int(w_end),
-                "limit": 100, "cursor": cursor,
-            })
-            out.extend(res.get("list") or [])
-            cursor = res.get("nextPageCursor")
-            if not cursor:
-                break
+        windows.append((w_start, w_end))
         w_end = w_start
+
+    sem = asyncio.Semaphore(4)
+
+    async def one(w_start: float, w_end: float) -> tuple[list, bool]:
+        rows: list = []
+        cursor = None
+        truncated = False
+        async with sem:
+            for i in range(max_pages_per_window):
+                res = await _get(path, {
+                    "category": category, "startTime": int(w_start), "endTime": int(w_end),
+                    "limit": 100, "cursor": cursor,
+                })
+                rows.extend(res.get("list") or [])
+                cursor = res.get("nextPageCursor")
+                if not cursor:
+                    break
+                if i == max_pages_per_window - 1:
+                    truncated = True   # страницы кончились, а курсор ещё есть
+        return rows, truncated
+
+    results = await asyncio.gather(*(one(a, b) for a, b in windows))
+    out: List[dict] = []
+    for rows, truncated in results:
+        out.extend(rows)
+        _TRUNCATED = _TRUNCATED or truncated
     return out
 
 

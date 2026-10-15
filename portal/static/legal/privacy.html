@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Privacy Policy — TradeVision</title>
+<link rel="icon" type="image/png" href="/static/img/logo.png">
+<style>
+:root{color-scheme:dark;--bg:#060707;--card:#101312;--line:rgba(255,255,255,.08);--tx:#f2f5f3;--mut:#9aa69f;--ok:#5ee6a8}
+*{box-sizing:border-box;font-family:'Inter','Segoe UI',system-ui,Arial,sans-serif}
+body{background:var(--bg);color:var(--tx);margin:0;padding:40px 20px;line-height:1.62}
+.wrap{max-width:860px;margin:0 auto}
+a{color:var(--ok)}
+h1{font-size:28px;margin:0 0 6px}h2{font-size:18px;margin:28px 0 8px}
+p,li{color:#dfe5e1;font-size:15px;margin:7px 0}
+.mut{color:var(--mut);font-size:13px}
+.todo{background:rgba(255,107,122,.12);border:1px solid rgba(255,107,122,.4);color:#ffb3ba;
+      border-radius:12px;padding:12px 14px;font-size:13.5px;margin:18px 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px 20px;margin:16px 0}
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:14px}
+th,td{border-bottom:1px solid var(--line);padding:9px 8px;text-align:left;vertical-align:top}
+th{color:var(--mut);font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.04em}
+nav{margin-bottom:24px;font-size:13.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav><a href="/">← TradeVision</a> · <a href="/legal/imprint.html">Impressum</a> ·
+       <a href="/legal/privacy.html">Privacy</a> · <a href="/legal/terms.html">Terms</a></nav>
+
+  <h1>Privacy Policy</h1>
+  <p class="mut">Information according to Art. 13, 14 GDPR (Regulation (EU) 2016/679). Last updated: 2026-10-15.</p>
+
+  <div class="todo" id="fillme">
+    <b>Перед публикацией:</b> подставьте реальные данные контролёра (<code>[[...]]</code>), контакт DPO/ответственного
+    лица и, если применимо, упомяните хостинг-провайдера и заключённый с ним договор обработки (AVV/DPA).
+    Шаблон описывает ровно те данные, которые проект реально собирает по коду — сверяйте с фактическим деплоем.
+  </div>
+
+  <div class="card">
+    <h2>1. Controller</h2>
+    <p>[[OPERATOR LEGAL NAME]], [[STREET &amp; NUMBER]], [[POSTAL CODE CITY]], [[COUNTRY]] —
+       e-mail <a href="mailto:[[CONTACT EMAIL]]">[[CONTACT EMAIL]]</a>. Contact for data-protection questions:
+       [[DPO / RESPONSIBLE PERSON + CONTACT]].</p>
+  </div>
+
+  <h2>2. What we process, why and on which legal basis</h2>
+  <table>
+    <tr><th>Data</th><th>Purpose</th><th>Legal basis</th><th>Retention</th></tr>
+    <tr>
+      <td>E-mail address, password hash (PBKDF2-HMAC-SHA256 with per-user salt, 260 000 iterations), account creation date</td>
+      <td>Account creation, login, access control, subscription management</td>
+      <td>Art. 6(1)(b) GDPR (contract)</td>
+      <td>Until account deletion, then deleted; invoices/audit records per statutory periods</td>
+    </tr>
+    <tr>
+      <td>Session cookie (<code>tav_session</code>; HttpOnly, SameSite=Lax, Secure over HTTPS). Only a SHA-256 hash of the token is stored server-side</td>
+      <td>Keeping you logged in; strict access gate (30-day subscription window)</td>
+      <td>Art. 6(1)(b) GDPR; § 25(2) TDDDG (strictly necessary, no consent required)</td>
+      <td>Session lifetime: 30 days of inactivity, then deleted automatically</td>
+    </tr>
+    <tr>
+      <td>IP address, user-agent — stored with security events (login attempts, admin actions, payment matching) and in short-lived rate-limit counters</td>
+      <td>Protection against brute-force/abuse, fraud prevention, evidence in case of attacks</td>
+      <td>Art. 6(1)(f) GDPR (legitimate interest in a secure service)</td>
+      <td>Rate-limit counters: up to 7 days. Security audit log: up to 180 days</td>
+    </tr>
+    <tr>
+      <td>Referral code cookie (<code>tav_ref</code>, 7 days) and click events (code, IP, user-agent, timestamp)</td>
+      <td>Attribution of affiliate/referral commission</td>
+      <td>Art. 6(1)(f) GDPR (interest in fair commission accounting); § 25(2) TDDDG</td>
+      <td>Click data: as long as needed for commission accounting; cookie: 7 days</td>
+    </tr>
+    <tr>
+      <td>Payment data: invoice amount, chosen network (TRC20/BEP20), receiving public wallet address, transaction hash, timestamps</td>
+      <td>Detecting and matching your crypto payment, activating the 30-day access, statutory bookkeeping</td>
+      <td>Art. 6(1)(b) GDPR; Art. 6(1)(c) GDPR (tax/accounting)</td>
+      <td>Per statutory retention (typically up to 10 years for accounting records)</td>
+    </tr>
+    <tr>
+      <td>Your exchange API keys — <b>read-only keys only, and only if you voluntarily connect them</b>. Stored encrypted with AES-256-GCM; the encryption key lives in the server environment, not in the database</td>
+      <td>Reading your trade history to build the statistics/DNA features you requested</td>
+      <td>Art. 6(1)(b) GDPR (service you requested)</td>
+      <td>Until you delete them in the account — deletion is immediate and irreversible for us</td>
+    </tr>
+    <tr>
+      <td>Trade history and derived analytics (if you upload a CSV or connect read-only keys): symbols, sides, PnL, timestamps, indicator context, derived "DNA" statistics</td>
+      <td>Analytics you requested; personalisation of signal filtering</td>
+      <td>Art. 6(1)(b) GDPR</td>
+      <td>Stored locally on the deployment for your account; deletable on request</td>
+    </tr>
+    <tr>
+      <td>Telegram username/ID, if you message the bot or bind a partner code</td>
+      <td>Support, notification delivery, partner statistics</td>
+      <td>Art. 6(1)(b)/(f) GDPR</td>
+      <td>Until unbinding/deletion request</td>
+    </tr>
+    <tr>
+      <td>Open-source market data requests (public exchange APIs)</td>
+      <td>Charts, signals, backtests</td>
+      <td>No personal data is transmitted by us; your IP is visible to the exchange when your browser/our server calls it</td>
+      <td>—</td>
+    </tr>
+  </table>
+
+  <h2>3. What we deliberately do NOT do</h2>
+  <ul>
+    <li>No trading, withdrawal or transfer permissions are ever accepted or stored — read-only keys are validated
+        against the exchange and rejected if they carry trade/withdraw rights.</li>
+    <li>No third-party advertising or tracking pixels, no social plugins, no cross-site profiling, no data selling.</li>
+    <li>No automated decision-making producing legal effect (Art. 22 GDPR). Signal analytics is advisory output; you decide.</li>
+    <li>No custody of funds or keys: payments go directly to a public wallet address; private keys never exist on the server.</li>
+  </ul>
+
+  <h2>4. Recipients / processors</h2>
+  <ul>
+    <li><b>Hosting provider</b> of the deployment (server, backups): [[HOSTING PROVIDER + LOCATION — ideally EU]]; DPA concluded.</li>
+    <li><b>Exchange public APIs</b> (e.g. Bybit) — to fetch market data and, with your consent, your history. Your read-only keys are sent to the exchange for authentication, as technically required.</li>
+    <li><b>Blockchain explorers</b> (Tronscan, BscScan) — public, watch-only queries of the receiving address to match your payment. Only public blockchain data and our own address are queried.</li>
+    <li><b>AI model provider</b> (OpenAI-compatible endpoint configured by the operator, or a free community provider) — trade summaries and market snapshots may be sent to generate text analysis. Never your password, never full API keys, never withdrawal-relevant data. If you prefer no AI processing, disable the corresponding roles.</li>
+    <li><b>Telegram</b> (if you use the bot) — Telegram is an independent controller for messages you send there.</li>
+  </ul>
+
+  <h2>5. Transfers outside the EU/EEA</h2>
+  <p>Some processors (AI providers, Telegram, exchange APIs) may operate outside the EU/EEA. Where required, transfers rely on
+     Art. 45 (adequacy) or Art. 46 (Standard Contractual Clauses) plus additional safeguards of the respective provider.</p>
+
+  <h2>6. Your rights</h2>
+  <p>You have the right to access (Art. 15), rectification (Art. 16), erasure (Art. 17), restriction (Art. 18),
+     data portability (Art. 20), objection (Art. 21) and to withdraw consent at any time (Art. 7(3)) without affecting
+     prior lawfulness. You may also lodge a complaint with a supervisory authority (Art. 77); competent authority:
+     [[SUPERVISORY AUTHORITY]]. Requests: <a href="mailto:[[CONTACT EMAIL]]">[[CONTACT EMAIL]]</a>.</p>
+
+  <h2>7. Cookies and local storage</h2>
+  <p>We use only strictly necessary cookies/local storage: session, referral code, and UI preferences (sound/notifications,
+     watchlist). No analytics or marketing cookies exist in this application, so no consent banner is required under
+     § 25(2) TDDDG. If you add analytics later, this section must be updated and consent implemented.</p>
+
+  <h2>8. Security</h2>
+  <p>Transport encryption (HTTPS/HSTS via reverse proxy), password hashing with PBKDF2 (per-user salt, 260k iterations),
+     session tokens stored only as hashes, AES-256-GCM encryption for user exchange keys, least-privilege process users,
+     access-rate limits, audit logging of administrative and payment actions. No system is impenetrable — if you discover a
+     vulnerability, please contact us first at <a href="mailto:[[SECURITY EMAIL]]">[[SECURITY EMAIL]]</a>.</p>
+
+  <h2>9. Changes</h2>
+  <p>We will update this policy when the processing changes and will indicate the revision date at the top.</p>
+</div>
+</body>
+</html>

@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import json
@@ -174,7 +175,7 @@ async def load_trades(days: int = 90, force: bool = False,
         frm = from_ts if custom else now_ms - days * D
         to = to_ts if custom else now_ms
         # календарный пол кэша: что уже скачано (6 ч допуска против дребезга суток)
-        cache = _read_cache()
+        cache = await asyncio.to_thread(_read_cache)   # файл не читаем в event loop
         cached: List[dict] = cache.get("trades") or []
         fetched_days = int(cache.get("fetched_days") or 0)
         cache_floor = now_ms - fetched_days * D if fetched_days else now_ms
@@ -184,7 +185,7 @@ async def load_trades(days: int = 90, force: bool = False,
         if force or not cached or (not custom and need_days > fetched_days) or deeper:
             closed = await fetch_closed_pnl(days=need_days)
             trades = normalize_closed_pnl(closed)
-            _write_cache(trades, need_days)
+            await asyncio.to_thread(_write_cache, trades, need_days)
             cached = trades
             cache_mode, cache_added, fetched_days = "full", len(trades), need_days
         else:
@@ -201,13 +202,18 @@ async def load_trades(days: int = 90, force: bool = False,
                 added = [t for t in fresh if _trade_key(t) not in seen]
                 if added:
                     cached = sorted(cached + added, key=lambda t: t.get("close_ts") or 0)
-                    _write_cache(cached, fetched_days)
+                    await asyncio.to_thread(_write_cache, cached, fetched_days)
                 cache_added = len(added)
 
         window = [t for t in cached if frm <= (t.get("close_ts") or 0) <= to]
+        try:
+            from bybit_account import last_truncated
+            truncated = last_truncated()
+        except Exception:
+            truncated = False
         return {"trades": window, "source": "bybit_api", "count": len(window),
                 "cache": cache_mode, "cache_added": cache_added,
-                "cache_total": len(cached),
+                "cache_total": len(cached), "truncated": truncated,
                 "span_days": max(1, round((to - frm) / D))}
 
     if os.path.exists(CSV_PATH):
@@ -227,6 +233,11 @@ def save_csv(text: str) -> dict:
         f.write(text)
     trades = normalize_csv(text)
     return {"saved": True, "count": len(trades)}
+
+
+async def save_csv_async(text: str) -> dict:
+    """То же, но разбор и запись 8 МБ не стоят в event loop."""
+    return await asyncio.to_thread(save_csv, text)
 
 
 # ---------------------------------------------------------------------- #

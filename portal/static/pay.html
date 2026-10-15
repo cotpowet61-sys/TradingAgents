@@ -121,7 +121,8 @@ async function boot(){
 }
 async function keyState(){
   const k=await(await fetch('/api/user/bybit-keys')).json();
-  $('keysState').innerHTML=k.has_keys
+  const has=(k.has_keys!==undefined)?k.has_keys:k.connected;
+  $('keysState').innerHTML=has
     ?'<span class="pill ok">🔒 keys saved (read-only)</span> <a href="#" onclick="delKeys();return false" style="font-size:12px;margin-left:8px">remove</a>'
     :'<span class="pill warn">keys not connected</span>';
 }
@@ -138,14 +139,21 @@ async function delKeys(){await fetch('/api/user/bybit-keys',{method:'DELETE'});k
 async function invoice(net){
   const r=await fetch('/api/billing/invoice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({network:net})});
   const d=await r.json().catch(()=>({}));
-  if(!r.ok){alert(d.detail||'error');return;}
+  if(!r.ok){
+    const why={network_not_configured:'Приём в этой сети не настроен — выберите другую сеть или напишите в поддержку.',
+               busy_try_later:'Все платёжные суммы часа заняты — подождите пару минут.',
+               bad_network:'Некорректная сеть.'}[d.detail]||d.detail||'error';
+    $('inv').hidden=false;$('stPill').textContent='⚠️ '+why;$('stPill').className='pill warn';
+    return;
+  }
   window._inv=d;renderInv(d);
 }
 function renderInv(d){
   $('inv').hidden=false;$('net').textContent=d.network.toUpperCase();
   $('amt').textContent=d.amount.toFixed(2)+' USDT';
   $('addr').textContent=(d.network==='trc20'?ME.wallets.trc20:ME.wallets.bep20)||d.address||'—';
-  $('exp').textContent='Invoice valid until '+new Date(d.expires_at).toLocaleString();
+  const expMs=(d.expires_in_sec?Date.now()+d.expires_in_sec*1000:(d.expires_at||0));
+  $('exp').textContent=expMs>0?('Invoice valid until '+new Date(expMs).toLocaleString()):'Invoice valid 24h';
   if(!POLL)POLL=setInterval(poll,15000);poll();
 }
 async function poll(){
@@ -157,6 +165,26 @@ async function poll(){
 }
 function copyAddr(){navigator.clipboard.writeText($('addr').textContent);}
 async function logout(){await fetch('/api/auth/logout',{method:'POST'});location='/landing.html';}
+// быстрые ссылки кабинета: смена пароля и юр. документы
+(function links(){
+  const box=document.querySelector('.mut');
+  if(!box)return;
+  const a=document.createElement('div');
+  a.style.cssText='text-align:center;font-size:12px;margin-top:10px';
+  a.innerHTML='<a href="#" onclick="changePwd();return false">Change password</a> · '+
+    '<a href="/legal/terms.html">Terms</a> · <a href="/legal/privacy.html">Privacy</a> · '+
+    '<a href="/legal/imprint.html">Impressum</a>';
+  box.parentElement.appendChild(a);
+})();
+// смена пароля из кабинета
+async function changePwd(){
+  const cur=prompt('Текущий пароль:');if(!cur)return;
+  const nw=prompt('Новый пароль (мин. 8 символов):');if(!nw)return;
+  const r=await fetch('/api/auth/password',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({current:cur,new:nw})});
+  const d=await r.json().catch(()=>({}));
+  alert(r.ok?'Пароль обновлён. Остальные устройства вышли из аккаунта.':('Не удалось: '+(d.detail||'ошибка')));
+}
 boot();
 </script>
 </body>

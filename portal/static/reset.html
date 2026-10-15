@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Сброс пароля — TradeVision</title>
+<link rel="icon" type="image/png" href="/static/img/logo.png">
+<style>
+:root{color-scheme:dark;--bg:#060707;--card:#101312;--line:rgba(255,255,255,.08);--tx:#f2f5f3;--mut:#9aa69f;--ok:#5ee6a8;--bad:#ff6b7a}
+*{box-sizing:border-box;font-family:'Inter','Segoe UI',system-ui,Arial,sans-serif}
+body{background:radial-gradient(circle at 70% -10%,rgba(94,230,168,.12),transparent 55%),var(--bg);
+     color:var(--tx);display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:24px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:22px;padding:28px;max-width:460px;width:100%}
+h1{font-size:22px;margin:0 0 8px}
+p{color:var(--mut);font-size:14px;line-height:1.5}
+label{display:block;font-size:12px;color:var(--mut);margin:16px 0 6px}
+input{width:100%;padding:12px 14px;border-radius:12px;border:1px solid var(--line);background:#0b0e0d;color:var(--tx);font-size:15px}
+input:focus{outline:1px solid var(--ok)}
+button{margin-top:18px;width:100%;padding:13px;border-radius:999px;border:0;background:#fff;color:#060707;font-weight:700;cursor:pointer;font-size:15px}
+button:disabled{opacity:.6;cursor:default}
+.msg{margin-top:14px;font-size:13px;min-height:18px}
+.ok{color:var(--ok)}.bad{color:var(--bad)}
+a{color:var(--ok)}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1 id="h">Восстановление пароля</h1>
+  <p id="lead">Введите e-mail аккаунта — мы передадим одноразовую ссылку поддержке в Telegram.
+     Ссылка действует 1 час и сбрасывает также все активные сессии.</p>
+
+  <form id="reqForm" onsubmit="return requestReset(event)">
+    <label for="em">E-mail</label>
+    <input id="em" type="email" autocomplete="email" required>
+    <button type="submit" id="reqBtn">Отправить ссылку</button>
+  </form>
+
+  <form id="setForm" hidden onsubmit="return confirmReset(event)">
+    <label for="pw">Новый пароль (минимум 8 символов)</label>
+    <input id="pw" type="password" autocomplete="new-password" minlength="8" required>
+    <label for="pw2">Повторите пароль</label>
+    <input id="pw2" type="password" autocomplete="new-password" minlength="8" required>
+    <button type="submit" id="setBtn">Сохранить новый пароль</button>
+  </form>
+
+  <div class="msg" id="msg"></div>
+  <p style="margin-top:18px"><a href="/">← Вернуться на сайт</a></p>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const TOKEN=new URLSearchParams(location.search).get('token')||'';
+function msg(t,cls){$('msg').textContent=t;$('msg').className='msg '+(cls||'');}
+if(TOKEN){
+  $('reqForm').hidden=true;$('setForm').hidden=false;
+  $('h').textContent='Новый пароль';
+  $('lead').textContent='Ссылка одноразовая. После сохранения все старые сессии будут завершены.';
+}
+async function requestReset(e){
+  e.preventDefault();$('reqBtn').disabled=true;
+  const r=await fetch('/api/auth/reset/request',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email:$('em').value})});
+  const d=await r.json().catch(()=>({}));
+  $('reqBtn').disabled=false;
+  if(r.status===429){msg('Слишком много запросов. Повторите через '+((d.retry_after||60))+' с.','bad');return false;}
+  msg(r.ok?'Готово. Если аккаунт существует, ссылка ушла поддержке — проверьте Telegram.'
+          :('Ошибка: '+(d.detail||'неизвестная')),r.ok?'ok':'bad');
+  return false;
+}
+async function confirmReset(e){
+  e.preventDefault();
+  if($('pw').value!==$('pw2').value){msg('Пароли не совпадают','bad');return false;}
+  $('setBtn').disabled=true;
+  const r=await fetch('/api/auth/reset/confirm',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({token:TOKEN,password:$('pw').value})});
+  const d=await r.json().catch(()=>({}));
+  $('setBtn').disabled=false;
+  if(r.ok){msg('Пароль обновлён. Перенаправляем на вход…','ok');setTimeout(()=>location='/',1600);}
+  else msg('Не получилось: '+(d.detail==='invalid_token'?'ссылка неверна или истекла':(d.detail||'ошибка')),'bad');
+  return false;
+}
+</script>
+</body>
+</html>

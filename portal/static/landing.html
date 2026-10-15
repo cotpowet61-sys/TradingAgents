@@ -135,12 +135,12 @@ footer{border-top:1px solid var(--line);margin-top:60px;padding:26px 0 40px;colo
   <section class="hero hero-grid">
     <div class="hero-text">
       <div class="hero-chips" id="heroChips"></div>
-      <span class="eyebrow"><s></s> LIVE SCANNER · signals verified on-chain of time</span>
+      <span class="eyebrow"><s></s> LIVE SCANNER · append-only signal log, nothing edited afterwards</span>
       <h1>Your signals keep lying to you.<br><em>Ours learn from every trade.</em></h1>
-      <p class="sub">A neural trading coach that scans 20+ strategies in real time, blocks the setups that lose <b>your</b> money, and calculates the exact position size for your deposit. Fully verified public track record — every signal logged, nothing edited retroactively.</p>
+      <p class="sub">A neural trading coach that scans 20+ strategies in real time, blocks the setups that lose <b>your</b> money, and calculates the exact position size for your deposit. Public append-only track record: every signal is logged when it closes and entries are never edited retroactively. Only real exchange data is counted — if the feed is down, nothing is published.</p>
       <div class="cta-row">
         <a class="btn" href="#" onclick="openAuth('signup');return false" style="font-size:16px;padding:15px 30px">Get instant access — $100/mo</a>
-        <a class="btn ghost" href="#track">See the verified track ↓</a>
+        <a class="btn ghost" href="#track">See the live track record ↓</a>
       </div>
       <p class="micro">USDT (TRC20 · Tron network) · access activates automatically in 1–2 minutes · no card, no KYC · cancel anytime</p>
     </div>
@@ -165,6 +165,7 @@ footer{border-top:1px solid var(--line);margin-top:60px;padding:26px 0 40px;colo
         <div class="inner"><b id="wrStrong">—</b><small>win rate</small></div>
       </div>
       <p class="hint" style="text-align:center">vs <b id="wrAll" style="color:var(--tx)">—</b> on all signals, honestly side by side</p>
+      <p class="hint" id="trackCI" style="text-align:center;font-size:11px"></p>
     </div>
     <div class="card c4">
       <h3>Cumulative signal PnL</h3>
@@ -193,11 +194,11 @@ footer{border-top:1px solid var(--line);margin-top:60px;padding:26px 0 40px;colo
   <h2 id="features">Built to stop the bleeding</h2>
   <p class="sub2">Not another "signal group". A system that studies why you lose and pipes only what survives.</p>
   <section class="feat">
-    <div class="card"><div class="ic">🔍</div><h3>Self-learning scanner</h3><p>13 coins × 20+ strategies × live orderflow. Weak coin×strategy combos get throttled automatically, reviewed by the AI curator, re-tested after 72h. The market changes — the filter follows.</p></div>
-    <div class="card"><div class="ic">🧬</div><h3>Your trading DNA</h3><p>Upload your exchange history (read-only key). We find the zones, hours and patterns where <b>you personally</b> lose — and gate signals through them. This alone saves most traders 10-30% of deposit.</p></div>
+    <div class="card"><div class="ic">🔍</div><h3>Self-learning scanner</h3><p>23 indicators-based strategies × your watchlist × live orderflow. Weak coin×strategy combos get throttled automatically, reviewed by the AI curator, re-tested after 72h. The market changes — the filter follows.</p></div>
+    <div class="card"><div class="ic">🧬</div><h3>Your trading DNA</h3><p>Upload your exchange history (read-only key). We map the zones, hours and patterns where <b>you personally</b> lose and gate signals through them. It's a diagnostic, not a promise: you see your own numbers, we don't invent them.</p></div>
     <div class="card"><div class="ic">🤖</div><h3>5 AI agents on demand</h3><p>Strategist, momentum, contrarian, macro and a risk officer debate the setup when you ask. You control the spend — AI never runs wild on your bill.</p></div>
     <div class="card"><div class="ic">💵</div><h3>Exact position sizing</h3><p>Every signal ships with quantity, margin, $-risk and $-target for YOUR deposit and leverage. One wrong 20x liquidation costs more than months of access — sizing is the survival kit.</p></div>
-    <div class="card"><div class="ic">📊</div><h3>Backtest before trust</h3><p>Validate any strategy on any historical range first. If a tactic can't prove itself on data, it never reaches your screen.</p></div>
+    <div class="card"><div class="ic">📊</div><h3>Backtest before trust</h3><p>Validate the scanner's own rules on history before you trust them — same code paths as the live feed, real candles only. Synthetic data is refused, not silently used.</p></div>
     <div class="card"><div class="ic">🔬</div><h3>Quant research inside</h3><p>RSI/ATR/volume regimes, Kalman-style smoothing on noisy entries, MAE/MFE journey of every trade — the same math props pay quants for, distilled into readable cards.</p></div>
     <div class="card"><div class="ic">🔒</div><h3>Read-only by design</h3><p>We accept only Read-Only exchange keys — validated at save. We can't touch your funds even if hacked; keys are encrypted AES-256 at rest.</p></div>
   </section>
@@ -231,7 +232,8 @@ footer{border-top:1px solid var(--line);margin-top:60px;padding:26px 0 40px;colo
   <section class="faq">
     <details><summary>Is this financial advice?</summary><p>No. It's an analytics and education tool: scanner, statistics of your own trades and position-size math. Final decisions are always yours. Crypto futures are high-risk; never trade money you can't afford to lose.</p></details>
     <details><summary>Do you need access to my funds?</summary><p>Never. Payment goes from your wallet directly to the project's public address. If you connect an exchange key for the DNA feature, it must be Read-Only — we validate and reject anything with trade/withdraw rights.</p></details>
-    <details><summary>How does the track record stay honest?</summary><p>Outcomes are appended automatically when each signal closes; entries cannot be edited or deleted by anyone. We show the "all signals" stats next to the filtered strong-zone branch so you can verify both.</p></details>
+    <details><summary>How does the track record stay honest?</summary><p>Outcomes are appended automatically when each signal closes and cannot be edited or deleted. Only signals produced from real exchange data are counted: if the market feed is unavailable, the scanner stops publishing instead of filling the log with test data. Statistics are shown with a 95% confidence interval, and until the sample reaches the minimum size the page says "collecting data" instead of showing a number you could read as a result.</p></details>
+    <details><summary>Can I recover a lost password?</summary><p>Yes. On the login screen use “Forgot password”: we send a single-use link to the project's support Telegram, it works for one hour and invalidates every existing session. No e-mail provider is involved, so nothing can be phished from your inbox.</p></details>
     <details><summary>What's your refund/cancellation policy?</summary><p>Access runs 30 days from payment; it doesn't auto-renew. Want next month — pay again. No stored cards, no surprise charges, no cancellation gymnastics.</p></details>
     <details><summary>Which exchanges are supported?</summary><p>Scanner signals are built from Bybit spot/futures data — tradeable on any major exchange. The DNA feature reads Bybit histories (OKX/Binance readers are on the roadmap).</p></details>
   </section>
@@ -239,7 +241,13 @@ footer{border-top:1px solid var(--line);margin-top:60px;padding:26px 0 40px;colo
   <footer>
     <b>Risk disclosure.</b> This software is an analytical/educational tool, not financial advice, not asset management. Crypto futures trading carries extreme risk of loss; past performance never guarantees future results. By subscribing you accept full responsibility for your trading decisions. 18+.
     <br><br><span id="brandFoot">TradeVision</span> · <span id="tgFoot"></span> · <span id="year"></span>
-  </footer>
+    <div style="font-size:12px;color:var(--mut);margin-top:8px">
+    <a href="/legal/imprint.html" style="color:var(--mut)">Legal notice / Impressum</a> ·
+    <a href="/legal/privacy.html" style="color:var(--mut)">Privacy</a> ·
+    <a href="/legal/terms.html" style="color:var(--mut)">Terms</a> ·
+    <a href="/reset.html" style="color:var(--mut)">Forgot password</a>
+  </div>
+</footer>
 </div>
 
 <!-- auth modal -->
@@ -280,6 +288,17 @@ function fill(){
   $('nAll').textContent=t.all.n;
   $('pnlAll').textContent=(t.all.total_pnl_pct>0?'+':'')+t.all.total_pnl_pct;
   $('trackNote').textContent=t.note;
+  if(t.collecting){
+    // Мало данных: показываем не «красивый процент», а честный статус набора.
+    $('wrStrong').textContent='—';$('wrAll').textContent='—';
+    $('pnlAll').textContent=(t.all&&t.all.n)?t.all.total_pnl_pct.toFixed(1):'0.0';
+    $('nAll').textContent=String(t.all?t.all.n:0)+' / '+t.min_public_n+' needed';
+    const ci=document.getElementById('trackCI');
+    if(ci)ci.textContent='collecting data — a win rate on '+((t.all&&t.all.n)||0)+' signals would be noise';
+  } else if(t.winrate_ci95){
+    const ci=document.getElementById('trackCI');
+    if(ci)ci.textContent='win rate '+((t.all&&t.all.winrate)||0)+'% (95% CI '+t.winrate_ci95[0]+'–'+t.winrate_ci95[1]+'%, n='+((t.all&&t.all.n)||0)+')';
+  }
   // ring
   const c=$('ring').getContext('2d'),p=(t.strong.winrate||0)/100,cx=132,cy=132,r=112;
   c.lineWidth=18;c.lineCap='round';

@@ -1,18 +1,36 @@
 [Unit]
-Description=TradeVision Telegram bot (funnel + traffickers)
-After=network-online.target
+Description=TradeVision Telegram bot (client funnel + partner stats)
+After=network-online.target tradevision.service
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=tradevision
+Group=tradevision
 WorkingDirectory=/srv/tradevision/portal
+Environment=PYTHONUNBUFFERED=1
+Environment=PORTAL_ENV_FILE=/srv/tradevision/portal/.env
+Environment=PORTAL_DATA_DIR=/srv/tradevision/portal/data
 ExecStart=/srv/tradevision/venv/bin/python tg_bot.py
 Restart=always
 RestartSec=5
-Environment=PYTHONUNBUFFERED=1
+
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/tradevision/portal/data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+RestrictSUIDSGID=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
 
 [Install]
 WantedBy=multi-user.target

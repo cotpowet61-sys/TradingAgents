@@ -10,6 +10,9 @@
    justcode.lol, live-сигналы по watchlist'у и полный AI-разбор ваших реальных
    сделок (read-only ключи Bybit или CSV-экспорт).
    Запуск — `portal\start.bat` / `./portal/start.sh`, подробности — `portal/README.md`.
+   Тесты и CI: `./portal/run_tests.sh` (pytest, сеть не нужна) +
+   `.github/workflows/portal-ci.yml` (тесты, bandit, pip-audit, проверка секретов).
+   Боевой деплой: `DOMAIN=ваш_домен bash portal/deploy/deploy.sh`.
    Платформа никогда не тратит AI-токены без вашей команды.
 
 ---

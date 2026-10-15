@@ -11,6 +11,7 @@ Live-движок сигналов Портала: индикаторный ск
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import Optional, Set
 
@@ -22,9 +23,32 @@ from strategies.registry import build_strategy
 from strategies.selector import get_selector
 from strategies import indicators as ta
 
+log = logging.getLogger("portal.live")
+
 MAX_FEED = 60
 SIGNAL_COOLDOWN_SEC = 1800   # повтор сигнала по (монета, TF, та же сторона) — не чаще 30 мин
 FLIP_CONF_MARGIN = 0.10      # разворот SHORT↔LONG — только если новая уверенность выше на 10 п.п.
+SYNTHETIC_WARN_EVERY = 10    # как часто напоминать в лог, что биржа недоступна
+
+
+def real_data_ok() -> tuple[bool, str]:
+    """Можно ли доверять текущему источнику свечей.
+
+    Портал с 4 монетами × 7 ТФ опрашивает публичный API Bybit; при гео-блоке
+    market_data молча подставляет синтетику («учебный график»). Выдавать по ней
+    сигналы, обучаться на её исходах и публиковать их в трек-рекорде — это
+    самообман, поэтому здесь жёсткий стоп (симметрично signal_backtest.py).
+    """
+    try:
+        from data import market_data as md
+        src = (md._STATUS or {}).get("source") or "unknown"
+    except Exception:
+        return True, "unknown"
+    if src == "bybit":
+        return True, src
+    if not settings.REQUIRE_REAL_DATA:
+        return True, src
+    return False, src
 
 
 class LiveEngine:
@@ -37,9 +61,16 @@ class LiveEngine:
         self.last_scan: Optional[float] = None
         self._dna = None
         self._dna_mtime = 0.0
+        self._tf_cursor = 0
         # Реестр активных сигналов: (symbol, tf) -> event. Сигнал «живёт»,
         # пока цена не дойдёт до TP/SL или не выйдет таймаут удержания.
         self.active: dict = {}
+        # метрики эксплуатации (видны в /api/live/state и /api/health)
+        self.metrics: dict = {
+            "scans": 0, "emitted": 0, "closed": 0, "skipped_no_data": 0,
+            "skipped_low_conf": 0, "errors": 0, "last_error": "", "last_scan_ms": 0,
+            "scan_duration_ms": 0, "data_source": "unknown", "_syn_warned": 0,
+        }
 
     def _fresh_dna(self):
         """ДНК трейдера с диска (перечитываем при обновлении файла)."""
@@ -93,15 +124,35 @@ class LiveEngine:
             self._task.cancel()
             self._task = None
 
+    def _cadence_options(self) -> list[int]:
+        """Лестница интервалов сканирования (сек). Пусто → фиксированный интервал.
+
+        Портал не должен «долбить» публичный API Bybit: на 4 монетах × 7 ТФ
+        круг выходит ~28 запросов. По умолчанию берём SCAN_INTERVAL_SECONDS.
+        """
+        raw = (settings.SCAN_CADENCE_SECONDS or "").replace(";", ",")
+        vals = []
+        for part in raw.split(","):
+            part = part.strip()
+            if part.isdigit() and int(part) >= 5:
+                vals.append(int(part))
+        return sorted(set(vals)) or [max(5, int(settings.SCAN_INTERVAL_SECONDS))]
+
     async def _loop(self):
+        options = self._cadence_options()
+        i = 0
         while self.running:
+            interval = options[i % len(options)]
+            i += 1
             try:
                 await self.scan_once()
             except asyncio.CancelledError:
                 raise
-            except Exception as e:
-                print(f"[portal-live] ошибка сканирования: {e}")
-            await asyncio.sleep(max(5, settings.SCAN_INTERVAL_SECONDS))
+            except Exception as e:  # noqa: BLE001 — сканер не должен умирать
+                self.metrics["errors"] += 1
+                self.metrics["last_error"] = f"{type(e).__name__}: {str(e)[:200]}"
+                log.warning("[portal-live] ошибка сканирования: %s", e)
+            await asyncio.sleep(interval)
 
     def _fresh_my_strategy(self):
         """Персональная стратегия из my_strategy.json, с перечитыванием по mtime."""
@@ -237,10 +288,50 @@ class LiveEngine:
             "capped": capped,
         }
 
+    def _tick_tfs(self) -> list[str]:
+        """Таймфреймы на один проход: ротация по кругу (не все сразу).
+
+        Все ТФ за раз = n_монет × n_ТФ запросов каждые 30 с — это лишняя
+        нагрузка на публичный API и риск получить бан. Крутим по одному-двум,
+        полный обход watchlist'а остаётся быстрым.
+        """
+        all_tfs = settings.signal_timeframes
+        if not all_tfs:
+            return []
+        per_tick = max(1, int(settings.TFS_PER_TICK or 1))
+        if per_tick >= len(all_tfs):
+            return list(all_tfs)
+        out = []
+        for k in range(per_tick):
+            out.append(all_tfs[(self._tf_cursor + k) % len(all_tfs)])
+        self._tf_cursor = (self._tf_cursor + per_tick) % len(all_tfs)
+        return out
+
     async def scan_once(self):
+        t0 = time.time()
+        self.metrics["scans"] += 1
+        self.metrics["last_scan_ms"] = int(t0 * 1000)
+
+        ok, src = real_data_ok()
+        self.metrics["data_source"] = src
+        if not ok:
+            # Биржа недоступна → синтетика. Никаких сигналов, никаких исходов
+            # (иначе «учебные» числа уйдут в обучение и в публичный трек-рекорд).
+            self.metrics["skipped_no_data"] += 1
+            if self.metrics["skipped_no_data"] % SYNTHETIC_WARN_EVERY == 1:
+                log.warning("[portal-live] источник свечей = %s: сканирование пропущено "
+                            "(нужен доступ к Bybit или REQUIRE_REAL_DATA=false для локальной отладки)", src)
+            try:
+                await self.broadcast({"type": "data_status", "source": src, "trading": False})
+            except Exception:
+                pass
+            self.last_scan = t0
+            self.metrics["scan_duration_ms"] = int((time.time() - t0) * 1000)
+            return
+
         market = get_market()
         symbols = settings.watchlist
-        tfs = settings.signal_timeframes
+        tfs = self._tick_tfs()
         sel = get_selector()
 
         # тикеры (для карточек)
@@ -254,7 +345,7 @@ class LiveEngine:
                             "change24h": t.get("change24h", 0),
                             "market": t.get("market"),
                         }
-            await self.broadcast({"type": "prices", "prices": self.prices})
+            await self.broadcast({"type": "prices", "prices": self.prices, "source": src})
         except Exception:
             pass
 
@@ -265,11 +356,12 @@ class LiveEngine:
         import signal_learner as L
         for ev in self._close_matured_signals():
             try:
-                L.learn_from_event(ev)
-            except Exception:
-                pass
+                await asyncio.to_thread(L.learn_from_event, ev)   # БД + файлы — не в loop
+            except Exception as e:  # noqa: BLE001
+                log.warning("[portal-live] не записался исход сигнала: %s", e)
             self.feed.append(ev)
             self.feed = self.feed[-MAX_FEED:]
+            self.metrics["closed"] += 1
             await self.broadcast(ev)
 
         async def one(sym, tf):
@@ -294,15 +386,16 @@ class LiveEngine:
                     min_conf = settings.MIN_CONFIDENCE
                     try:
                         import signal_learner as L
-                        adj = L.get_adjustment(sym, stype, sig.side.value)
+                        adj = await asyncio.to_thread(L.get_adjustment, sym, stype, sig.side.value)
                         if adj and adj.get("blocked"):
                             return
                         if adj and adj.get("conf_delta"):
                             min_conf = max(0.30, min(0.95, min_conf + adj["conf_delta"]))
                             learned = adj
-                    except Exception:
-                        pass
+                    except Exception as e:  # noqa: BLE001
+                        log.warning("[portal-live] правила обучения недоступны для %s: %s", sym, e)
                     if sig.confidence < min_conf:
+                        self.metrics["skipped_low_conf"] += 1
                         return
                     summ = ta.compute_feature_summary(candles) or {}
                     # единые квант-фильтры входа (зеркало бэктестов) — signal_gates
@@ -379,13 +472,15 @@ class LiveEngine:
                         return
                     if pending_close:
                         try:
-                            L.learn_from_event(pending_close)
-                        except Exception:
-                            pass
+                            await asyncio.to_thread(L.learn_from_event, pending_close)
+                        except Exception as e:  # noqa: BLE001
+                            log.warning("[portal-live] исход разворота не записан: %s", e)
                         self.feed.append(pending_close)
                         self.feed = self.feed[-MAX_FEED:]
                         await self.broadcast(pending_close)
                     event["status"] = "ACTIVE"
+                    event["source"] = src
+                    event["real_data"] = True
                     event["stype"] = stype
                     event["entry"] = sig.entry
                     event["hi"] = sig.entry
@@ -395,23 +490,35 @@ class LiveEngine:
                     self.active[(sym, tf)] = dict(event)
                     self.feed.append(event)
                     self.feed = self.feed[-MAX_FEED:]
+                    self.metrics["emitted"] += 1
                     await self.broadcast(event)
-                    print(f"[portal-live] сигнал {sym} {tf} {sig.side.value} conf={sig.confidence:.2f} ({strat.name})")
-                except Exception:
-                    return
+                    log.info("[portal-live] сигнал %s %s %s conf=%.2f (%s)",
+                             sym, tf, sig.side.value, sig.confidence, strat.name)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:  # noqa: BLE001 — одна монета не должна ронять проход
+                    self.metrics["errors"] += 1
+                    self.metrics["last_error"] = f"{sym}:{type(e).__name__}: {str(e)[:160]}"
+                    log.warning("[portal-live] ошибка по %s %s: %s", sym, tf, e)
 
         await asyncio.gather(*(one(s, tf) for s in symbols for tf in tfs))
         self.last_scan = time.time()
+        self.metrics["scan_duration_ms"] = int((self.last_scan - t0) * 1000)
 
     def state(self) -> dict:
+        m = {k: v for k, v in self.metrics.items() if not k.startswith("_")}
         return {
             "running": self.running,
             "watchlist": settings.watchlist,
             "interval_seconds": settings.SCAN_INTERVAL_SECONDS,
+            "cadence_seconds": self._cadence_options(),
+            "tfs_per_tick": max(1, int(settings.TFS_PER_TICK or 1)),
             "timeframe": settings.DEFAULT_TIMEFRAME,
             "timeframes": settings.signal_timeframes,
             "last_scan": self.last_scan,
             "feed_count": len(self.feed),
+            "active_signals": len([1 for v in self.active.values() if v.get("status") == "ACTIVE"]),
+            "metrics": m,
         }
 
 

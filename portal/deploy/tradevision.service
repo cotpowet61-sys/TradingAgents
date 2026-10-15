@@ -1,19 +1,40 @@
 [Unit]
-Description=TradeVision Portal (SaaS)
+Description=TradeVision Portal (FastAPI, port 3005, localhost only)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=tradevision
+Group=tradevision
 WorkingDirectory=/srv/tradevision/portal
-ExecStart=/srv/tradevision/venv/bin/python -m uvicorn server:app --host 127.0.0.1 --port 3005
+Environment=PYTHONUNBUFFERED=1
+Environment=PORTAL_ENV_FILE=/srv/tradevision/portal/.env
+Environment=PORTAL_DATA_DIR=/srv/tradevision/portal/data
+ExecStart=/srv/tradevision/venv/bin/python -m uvicorn server:app --host 127.0.0.1 --port 3005 --proxy-headers --forwarded-allow-ips=127.0.0.1 --no-server-header
 Restart=always
 RestartSec=3
-Environment=PYTHONUNBUFFERED=1
-# защита процесса
+TimeoutStopSec=15
+
+# --- hardening ---
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/tradevision/portal/data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+RestrictSUIDSGID=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
 
 [Install]
 WantedBy=multi-user.target

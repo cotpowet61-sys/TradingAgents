@@ -23,6 +23,7 @@ import httpx
 import authn
 import db
 import partners
+import security
 
 log = logging.getLogger("portal.billing")
 
@@ -67,6 +68,29 @@ def _free_cents(network: str, price: float) -> float:
         if amt not in used:
             return amt
     raise RuntimeError("no_free_amount")   # >99 одновременных плательщиков — редкость фазы 0
+
+
+def invoice_view(inv: Optional[dict]) -> Optional[dict]:
+    """Единый вид инвойса для API.
+
+    В БД колонка называется expires_ms; наружу отдаём expires_at (мс) — и
+    ЗДЕСЬ, и в одном месте. Раньше saas_routes читал несуществующий ключ
+    'expires_at' прямо из строки БД → KeyError и 500 на всём пути оплаты.
+    """
+    if not inv:
+        return None
+    left_ms = int(inv.get("expires_ms") or 0) - int(time.time() * MS)
+    return {
+        "amount": float(inv["amount"]),
+        "network": inv["network"],
+        "expires_at": int(inv.get("expires_ms") or 0),
+        "expires_in_sec": max(0, left_ms // MS),
+        "invoice_id": inv.get("id"),
+    }
+
+
+async def invoice_view_async(inv: Optional[dict]) -> Optional[dict]:
+    return invoice_view(inv)
 
 
 def create_invoice(user_id: int, network: str, price: float) -> dict:
@@ -129,6 +153,10 @@ def record_tx(network: str, tx_hash: str, to_address: str, amount: float, ms: in
             new_until = authn.extend_subscription(inv["user_id"], 1)
             user = db.q("SELECT * FROM users WHERE id=?", (inv["user_id"],), one=True) or {}
             credited = partners.credit_payment(user, float(amount), tx_ref=tx_hash)  # % трафферу
+            security.audit("payment", actor=user.get("email", ""), detail=
+                           f"{network} {amount} USDT tx={tx_hash[:16]}… user#{inv['user_id']} "
+                           f"до {time.strftime('%Y-%m-%d', time.gmtime(new_until / 1000))}"
+                           + (f" partner={credited['code']}" if credited else ""))
             log.info("[billing] оплата %s %.2f USDT от user#%s → доступ до %s%s", network, amount,
                      inv["user_id"], time.strftime("%Y-%m-%d", time.gmtime(new_until / 1000)),
                      f" | партнёр {credited['code']} +${credited['amount']}" if credited else "")

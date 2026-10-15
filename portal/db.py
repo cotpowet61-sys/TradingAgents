@@ -28,7 +28,8 @@ if _USE_PG:
         _USE_PG = False  # драйвера нет → тихий фолбэк на SQLite
 
 PORTAL_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.environ.get("PORTAL_DB_PATH", os.path.join(PORTAL_DIR, "data", "saas.db"))
+_DATA_DIR = os.environ.get("PORTAL_DATA_DIR") or os.path.join(PORTAL_DIR, "data")
+DB_PATH = os.environ.get("PORTAL_DB_PATH", os.path.join(_DATA_DIR, "saas.db"))
 _lock = threading.RLock()
 
 _SCHEMA_SQLITE = """
@@ -67,6 +68,27 @@ CREATE TABLE IF NOT EXISTS paid_tx (
 );
 CREATE INDEX IF NOT EXISTS idx_inv_user ON invoices(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_inv_net ON invoices(network, status);
+CREATE TABLE IF NOT EXISTS rate_limits (
+  key TEXT PRIMARY KEY,
+  hits INTEGER NOT NULL DEFAULT 0,
+  window_start_ms INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS password_resets (
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  created_ms INTEGER NOT NULL,
+  expires_ms INTEGER NOT NULL,
+  used INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  action TEXT NOT NULL,
+  actor TEXT NOT NULL DEFAULT '',
+  ip TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT '',
+  ts_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit(ts_ms);
 """
 
 _SCHEMA_PG = """
@@ -105,6 +127,27 @@ CREATE TABLE IF NOT EXISTS paid_tx (
 );
 CREATE INDEX IF NOT EXISTS idx_inv_user ON invoices(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_inv_net ON invoices(network, status);
+CREATE TABLE IF NOT EXISTS rate_limits (
+  key TEXT PRIMARY KEY,
+  hits INTEGER NOT NULL DEFAULT 0,
+  window_start_ms BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS password_resets (
+  token_hash TEXT PRIMARY KEY,
+  user_id BIGINT NOT NULL,
+  created_ms BIGINT NOT NULL,
+  expires_ms BIGINT NOT NULL,
+  used INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS audit (
+  id BIGSERIAL PRIMARY KEY,
+  action TEXT NOT NULL,
+  actor TEXT NOT NULL DEFAULT '',
+  ip TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT '',
+  ts_ms BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit(ts_ms);
 """
 
 
@@ -170,11 +213,29 @@ def _conn():
     if _USE_PG:
         return _pg.connect(DATABASE_URL, autocommit=True, row_factory=_dict_row)
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    c = sqlite3.connect(DB_PATH, timeout=20)
+    c = sqlite3.connect(DB_PATH, timeout=30)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")
     c.execute("PRAGMA foreign_keys=ON")
+    c.execute("PRAGMA busy_timeout=30000")   # три процесса (uvicorn/tg-bot/watcher) на одной БД
+    c.execute("PRAGMA synchronous=NORMAL")
     return c
+
+
+async def aq(sql: str, params: tuple = (), one: bool = False):
+    """Асинхронная обёртка: блокирующий запрос уходит в поток, event loop не стоит.
+
+    Используется в горячих HTTP-эндпоинтах и в фоновом сканере. Соединение своё
+    (sqlite3 не потокобезопасен между вызовами), поэтому каждый запрос открывает
+    своё соединение — так же, как это делает q().
+    """
+    import asyncio
+    return await asyncio.to_thread(q, sql, params, one)
+
+
+async def aexecute(sql: str, params: tuple = ()) -> int:
+    import asyncio
+    return await asyncio.to_thread(execute, sql, params)
 
 
 def init_schema() -> None:
@@ -185,7 +246,9 @@ def init_schema() -> None:
     # мягкие миграции (SQLite кричит на дубль колонки — глушим)
     for mig in ("ALTER TABLE users ADD COLUMN referred_by TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE users ADD COLUMN user_keys_enc TEXT NOT NULL DEFAULT ''",
-                "ALTER TABLE traffickers ADD COLUMN tg_id INTEGER NOT NULL DEFAULT 0"):
+                "ALTER TABLE users ADD COLUMN iters INTEGER NOT NULL DEFAULT 260000",
+                "ALTER TABLE traffickers ADD COLUMN tg_id INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE sessions ADD COLUMN last_seen_ms INTEGER NOT NULL DEFAULT 0"):
         try:
             with _lock, _conn() as c:
                 c.execute(mig)

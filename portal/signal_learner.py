@@ -38,11 +38,19 @@ BLOCK_WR = 30.0
 TIGHTEN_WR = 40.0
 BOOST_WR = 65.0
 KEEP_LINES = 3000   # ротация журнала исходов
+MIN_PUBLIC_N = 30   # с какой выборки публичный трек-рекорд вообще что-то говорит
 
 
 def record_outcome(ev: dict) -> None:
-    """Журналирует исход сигнала (вызывается движком при каждом закрытии)."""
+    """Журналирует исход сигнала (вызывается движком при каждом закрытии).
+
+    Исходы по синтетическим («учебным») данным не пишем вообще: они отравляют
+    и обучение, и публичный трек-рекорд. События без явного флага считаются
+    историческими (журнал до введения флага) — их не выбрасываем.
+    """
     try:
+        if ev.get("real_data") is False or ev.get("source") in ("synthetic", "unknown"):
+            return
         os.makedirs(DATA_DIR, exist_ok=True)
         row = {
             "symbol": ev.get("symbol"),
@@ -54,6 +62,7 @@ def record_outcome(ev: dict) -> None:
             "reason": ev.get("reason"),
             "pnl_pct": ev.get("pnl_pct"),
             "duration_min": ev.get("duration_min"),
+            "real": ev.get("real_data", True),
             "ts": ev.get("ts") or int(time.time() * 1000),
         }
         with open(OUTCOMES_PATH, "a", encoding="utf-8") as f:
@@ -95,10 +104,32 @@ def read_outcomes() -> List[dict]:
 BLOCK_TTL_MS = 3 * 86_400_000  # блок живёт 3 дня, потом — проба (рынок меняется)
 
 
+def _real_rows(rows: List[dict]) -> List[dict]:
+    """Только исходы по реальным данным (журнал мог накопить старые записи)."""
+    return [o for o in rows if o.get("real", True)]
+
+
+def wilson(wins: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """Доверительный интервал Уилсона для доли побед (95%).
+
+    Голый winrate на выборке 8–12 сигналов врёт почти всегда: 3 победы из 8
+    отличаются от 8 из 12 случайно. Поэтому решения по правилам принимаются
+    ТОЛЬКО когда интервал целиком лежит в «плохой» или «хорошей» зоне.
+    """
+    if n <= 0:
+        return 0.0, 1.0
+    p = wins / n
+    d = 1 + z * z / n
+    center = (p + z * z / (2 * n)) / d
+    half = (z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5)) / d
+    return max(0.0, center - half), min(1.0, center + half)
+
+
 def compute_rules(outcomes: Optional[List[dict]] = None) -> Dict[str, List[dict]]:
     """→ {symbol: [правило, ...]}. Только реальные исходы (REFRESH не считаем)."""
-    rows = [o for o in (outcomes if outcomes is not None else read_outcomes())
-            if o.get("reason") in ("TP", "SL", "TIMEOUT", "REVERSED") and o.get("pnl_pct") is not None]
+    rows = _real_rows([o for o in (outcomes if outcomes is not None else read_outcomes())
+                       if o.get("reason") in ("TP", "SL", "TIMEOUT", "REVERSED")
+                       and o.get("pnl_pct") is not None])
     groups: Dict[tuple, List[dict]] = {}
     for o in rows:
         groups.setdefault((o["symbol"], o.get("stype") or "?", o.get("side") or "?"), []).append(o)
@@ -109,16 +140,19 @@ def compute_rules(outcomes: Optional[List[dict]] = None) -> Dict[str, List[dict]
         wins = sum(1 for x in g if x["pnl_pct"] > 0)
         wr = round(100 * wins / n, 1)
         total = round(sum(x["pnl_pct"] for x in g), 2)
+        lo, hi = wilson(wins, n)
         rule = {"symbol": sym, "stype": stype, "side": side, "sample": n,
-                "winrate": wr, "total_pnl_pct": total}
-        if n >= HARD_SAMPLE and wr < BLOCK_WR and total < 0:
+                "winrate": wr, "total_pnl_pct": total,
+                "wr_ci95": [round(100 * lo, 1), round(100 * hi, 1)]}
+        if n >= HARD_SAMPLE and total < 0 and hi * 100 < BLOCK_WR:
             rule.update({"action": "block", "conf_delta": None,
                          "expires_at": int(time.time() * 1000) + BLOCK_TTL_MS,
-                         "note": f"{side} по «{stype}» глушится на 3 дня: wr {wr}% за {n} сигналов (Σ {total}%)"})
-        elif n >= MIN_SAMPLE and wr < TIGHTEN_WR:
+                         "note": f"{side} по «{stype}» глушится на 3 дня: wr {wr}% "
+                                 f"(CI95 {rule['wr_ci95'][0]}–{rule['wr_ci95'][1]}%) за {n} сигналов (Σ {total}%)"})
+        elif n >= MIN_SAMPLE and hi * 100 < TIGHTEN_WR:
             rule.update({"action": "tighten", "conf_delta": TIGHTEN_DELTA,
                          "note": f"порог +{TIGHTEN_DELTA}: wr {wr}% за {n} сигналов"})
-        elif n >= MIN_SAMPLE and wr >= BOOST_WR and total > 0:
+        elif n >= MIN_SAMPLE and lo * 100 >= BOOST_WR and total > 0:
             rule.update({"action": "boost", "conf_delta": BOOST_DELTA,
                          "note": f"порог {BOOST_DELTA}: wr {wr}% за {n} сигналов"})
         else:
@@ -280,8 +314,8 @@ def track_summary(fit_min: float = 60.0) -> dict:
     Две ветки честно рядом: «все сигналы» и «🎯 кураторская» (fit score>=fit_min,
     шкала 0..100 — только сильная зона). Данные только добавляются закрытиями
     событий, задним числом не правятся. Сумм $ нет — один процент РОИ."""
-    CLOSED = ("TP", "SL", "EXPIRE", "RISK", "RISK2")
-    events = read_outcomes()
+    CLOSED = ("TP", "SL", "EXPIRE", "RISK", "RISK2", "TIMEOUT", "REVERSED")
+    events = _real_rows(read_outcomes())
     rows = [e for e in events
             if e.get("reason") in CLOSED and isinstance(e.get("pnl_pct"), (int, float))]
     rows.sort(key=lambda e: e.get("ts", 0))
@@ -313,11 +347,22 @@ def track_summary(fit_min: float = 60.0) -> dict:
         "day": time.strftime("%d.%m", time.localtime(e.get("ts", 0) / 1000)),
         "strong": _score(e) >= fit_min,
     } for e in rows[-30:][::-1]]
+    all_b, strong_b = _branch(rows), _branch(strong)
+    lo, hi = wilson(all_b["wins"], all_b["n"])
+    # «Идёт набор статистики» — показываем вместо цифр, которые нельзя читать
+    # как результат (лендинг обязан отличать витрину от доказательства).
+    collecting = all_b["n"] < MIN_PUBLIC_N
     return {
-        "all": _branch(rows),
-        "strong": _branch(strong),          # 🎯 ветка сильных зон
+        "all": all_b,
+        "strong": strong_b,                 # 🎯 ветка сильных зон
         "fit_min": fit_min,
         "equity": equity,
         "last": last,
-        "note": "Записи добавляются автоматически при закрытии сигналов и не редактируются задним числом.",
+        "min_public_n": MIN_PUBLIC_N,
+        "collecting": collecting,
+        "winrate_ci95": [round(100 * lo, 1), round(100 * hi, 1)],
+        "note": ("Записи добавляются автоматически при закрытии сигналов и не редактируются задним числом. "
+                 "Считаются только исходы по реальным данным биржи; сигналы по учебному графику "
+                 "не публикуются и не обучают систему.")
+                + (f" Выборка меньше {MIN_PUBLIC_N} сигналов — это ещё не статистика." if collecting else ""),
     }
