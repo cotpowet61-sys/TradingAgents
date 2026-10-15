@@ -230,10 +230,28 @@ def origin_allowed(request: Request, settings) -> bool:
 # --------------------------------------------------------------------- #
 # Заголовки
 # --------------------------------------------------------------------- #
+def normalize_frame_ancestors(spec: str) -> str:
+    """Приводит frame-ancestors к валидному виду.
+
+    Важно: в dotenv кавычки — синтаксис. Значение FRAME_ANCESTORS='self' в .env
+    доедет как `self`, а в CSP ключевые слова обязаны быть в кавычках
+    ('self'/'none') — иначе браузер прочитает их как имя хоста и запретит фрейминг.
+    """
+    parts = [p for p in (spec or "").split() if p]
+    out = []
+    for p in parts:
+        low = p.lower().strip("'\"")
+        if low in ("self", "none"):
+            out.append(f"'{low}'")
+        else:
+            out.append(low)
+    return " ".join(out) or "'self'"
+
+
 def security_headers(settings, https: bool = False) -> dict:
     if not getattr(settings, "SECURITY_HEADERS", True):
         return {}
-    frames = (getattr(settings, "FRAME_ANCESTORS", "") or "'self'").strip()
+    frames = normalize_frame_ancestors(getattr(settings, "FRAME_ANCESTORS", "") or "")
     csp = (
         "default-src 'self'; "
         "base-uri 'self'; form-action 'self'; object-src 'none'; "

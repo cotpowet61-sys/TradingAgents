@@ -240,3 +240,18 @@ def test_origin_check_works_behind_reverse_proxy(monkeypatch):
         r3 = c.post("/api/auth/login", json={"email": "x@example.com", "password": "whatever12"},
                     headers={"origin": "https://evil.example", "host": "10.0.0.5:3005"})
         assert r3.status_code == 403
+
+
+def test_frame_ancestors_is_normalized(monkeypatch):
+    """CSP-ключевые слова обязаны быть в кавычках, чужой домен — как есть.
+
+    Значение из .env приходит без кавычек (dotenv их снимает), поэтому
+    нормализуем: иначе браузер трактует `self` как имя хоста и ломает фрейминг.
+    """
+    fresh_env(monkeypatch)
+    security = load("security")
+    assert security.normalize_frame_ancestors("self") == "'self'"
+    assert security.normalize_frame_ancestors("'self' https://partner.example") == \
+        "'self' https://partner.example"
+    assert security.normalize_frame_ancestors("NONE") == "'none'"
+    assert security.normalize_frame_ancestors("") == "'self'"
