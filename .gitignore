@@ -41,3 +41,8 @@ portal/data/
 .venv-test/
 portal/.venv-test/
 .pytest_cache/
+
+# --- Исследовательский контур (research/): данные пользователя и артефакты ---
+research/data/
+research/artifacts/
+research/.cache/

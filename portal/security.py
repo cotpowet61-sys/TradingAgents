@@ -309,5 +309,13 @@ def install(app, settings) -> None:
         if p.startswith("/api/") or p in ("/app", "/pay.html", "/index.html"):
             resp.headers.setdefault("Cache-Control", "no-store, max-age=0")
         if p.startswith(_HEADER_SKIP):
-            resp.headers.pop("Content-Security-Policy", None)  # статике CSP не нужен
+            # Статике CSP не нужен (и она мешает встраивать превью), но у
+            # MutableHeaders НЕТ метода .pop() — из-за этого КАЖДЫЙ запрос к
+            # /static/* отдавал 500, то есть у боевого портала не грузились ни CSS,
+            # ни JS. Удаляем через del под защитой (в тестах это ловится запросом
+            # на реальный файл статики).
+            try:
+                del resp.headers["Content-Security-Policy"]
+            except (KeyError, AttributeError):
+                pass
         return resp

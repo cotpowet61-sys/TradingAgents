@@ -140,6 +140,15 @@ class PortalSettings(BaseSettings):
     SL_PCT_MIN: float = 0.25
     SL_PCT_MAX: float = 2.5
 
+    # ---- ИИ-фильтр сигналов (мета-модель из research/) ------------------ #
+    # Бандл обучает исследовательский контур (research/run.py all → bundle.json),
+    # портал только применяет его. Пока USE_CURATED=false — всё работает как раньше.
+    USE_CURATED: bool = False
+    CURATED_BUNDLE: str = ""          # путь к bundle.json (обычно research/artifacts/bundle.json)
+    CURATED_SHADOW: bool = True       # true = ничего не блокируем, только считаем и логируем
+    CURATED_MIN_P_WIN: float = 0.0    # 0 = брать порог из бандла
+    CURATED_MIN_EV: float = 0.0       # 0 = брать порог ожидаемого PnL из бандла
+
     # ------------------------------------------------------------------ #
     # SaaS (мульти-пользовательский режим продажи подписки)
     # ------------------------------------------------------------------ #
@@ -290,6 +299,14 @@ class PortalSettings(BaseSettings):
                     "risk_per_trade_pct": self.RISK_PER_TRADE_PCT,
                     "leverage": self.LEVERAGE,
                 },
+                "curated_ai": {
+                    "enabled": self.USE_CURATED,
+                    "shadow": self.CURATED_SHADOW,
+                    "bundle": _mask(self.CURATED_BUNDLE),
+                    "bundle_exists": bool(self.CURATED_BUNDLE) and os.path.exists(self.CURATED_BUNDLE),
+                    "min_p_win": self.CURATED_MIN_P_WIN,
+                    "min_ev": self.CURATED_MIN_EV,
+                },
                 "quant_filters": {
                     "atr_tp_mult": self.ATR_TP_MULT,
                     "atr_sl_mult": self.ATR_SL_MULT,
@@ -358,6 +375,11 @@ class PortalSettings(BaseSettings):
         "be_offset_pct": ("BE_OFFSET_PCT", "BE_OFFSET_PCT"),
         "trail_start_pct": ("TRAIL_START_PCT", "TRAIL_START_PCT"),
         "trail_pct": ("TRAIL_PCT", "TRAIL_PCT"),
+        "use_curated": ("USE_CURATED", "USE_CURATED"),
+        "curated_shadow": ("CURATED_SHADOW", "CURATED_SHADOW"),
+        "curated_bundle": ("CURATED_BUNDLE", "CURATED_BUNDLE"),
+        "curated_min_p_win": ("CURATED_MIN_P_WIN", "CURATED_MIN_P_WIN"),
+        "curated_min_ev": ("CURATED_MIN_EV", "CURATED_MIN_EV"),
         "tp_pct_min": ("TP_PCT_MIN", "TP_PCT_MIN"),
         "tp_pct_max": ("TP_PCT_MAX", "TP_PCT_MAX"),
         "sl_pct_min": ("SL_PCT_MIN", "SL_PCT_MIN"),
@@ -479,6 +501,46 @@ def ensure_env_file() -> None:
 # ---------------------------------------------------------------------- #
 # Проверка боевой конфигурации (вызывается на старте сервера)
 # ---------------------------------------------------------------------- #
+def ensure_secrets(s: "PortalSettings") -> list[str]:
+    """Первичная генерация секретов, без которых сервис не поднимется.
+
+    Зачем: в комментариях обещано «если AUTH_SECRET пуст — генерируется один раз и
+    пишется в .env», но генерации не было, и развёрнутый «с нуля» сервер с
+    SAAS_MODE=true просто отказывался стартовать. Хуже того — если бы секрет
+    генерировался в памяти, ключи клиентов, зашифрованные в одном запуске,
+    не расшифровались бы в следующем (PORTAL_AUTH_SECRET = ключ шифрования ключей).
+
+    Поэтому: генерируем ОДИН раз, пишем в .env, возвращаем список сообщений.
+    Существующие значения не перезаписываем никогда — иначе слетит расшифровка.
+    """
+    import secrets as _secrets
+    messages: list[str] = []
+    updates: dict[str, str] = {}
+    secret = (getattr(s, "AUTH_SECRET", "") or "").strip()
+    if len(secret) < 24:
+        secret = _secrets.token_hex(32)
+        updates["PORTAL_AUTH_SECRET"] = secret
+        messages.append("AUTH_SECRET сгенерирован (64 hex) и записан в " + ENV_PATH
+                        + " — СДЕЛАЙТЕ БЭКАП: без него не расшифруются ключи клиентов")
+    token = (getattr(s, "ADMIN_TOKEN", "") or "").strip()
+    if not token:
+        token = _secrets.token_urlsafe(32)
+        updates["ADMIN_TOKEN"] = token
+        messages.append("ADMIN_TOKEN сгенерирован (32+ символа) и записан в " + ENV_PATH
+                        + " — он же нужен для x-admin-token у /api/metrics и админ-API")
+    if not updates:
+        return messages
+    try:
+        _persist_env(updates)
+    except Exception as e:      # noqa: BLE001 — .env может быть только для чтения
+        messages.append(f"не удалось сохранить секреты в .env ({e}); "
+                        f"пропишите их вручную, иначе после перезапуска доступы сломаются")
+    # применяем в текущем процессе (файл уже обновлён, но объект настроек — в памяти)
+    s.AUTH_SECRET = secret
+    s.ADMIN_TOKEN = token
+    return messages
+
+
 def validate_startup(s: "PortalSettings") -> tuple[list[str], list[str]]:
     """→ (ошибки, предупреждения).
 
@@ -503,6 +565,21 @@ def validate_startup(s: "PortalSettings") -> tuple[list[str], list[str]]:
             warn.append("TELEGRAM_URL не задан — кнопка поддержки на лендинге/в кабинете не появится")
         if not any(s.role_model(r)["api_key"] for r in s.ROLE_KEYS) and not (s.FREE_AI_KEY or "").strip():
             warn.append("Нет ни одного AI-ключа — агенты будут отвечать демо-вердиктами (продукт продаётся с AI!)")
+    if s.USE_CURATED:
+        if not (s.CURATED_BUNDLE or "").strip():
+            warn.append("USE_CURATED=true, но CURATED_BUNDLE не задан — ИИ-фильтр включится только "
+                        "после публикации бандла (research/run.py all)")
+        elif not os.path.exists(s.CURATED_BUNDLE):
+            warn.append(f"CURATED_BUNDLE={s.CURATED_BUNDLE} не найден — сигналы идут без ИИ-фильтра")
+        try:
+            import curated as _cur                      # noqa: F401
+            _b = _cur.load_bundle(s.CURATED_BUNDLE)
+            print(f"[portal-config] ИИ-фильтр: бандл ок ({len(_b['features'])} признаков, "
+                  f"порог p={_b.get('threshold_win')}, обучен на {(_b.get('trained_on') or {}).get('train_n')} сделках, "
+                  f"shadow={s.CURATED_SHADOW})")
+        except Exception as e:      # noqa: BLE001
+            warn.append(f"ИИ-фильтр не загрузился ({e}) — сигналы идут без него")
+    if s.SAAS_MODE:
         if (s.WALLET_TRC20 or "").strip() and not s.TRC20_WATCH_ONLY_ACK:
             warn.append("WALLET_TRC20 задан: подтвердите, что это ПУБЛИЧНЫЙ адрес приёма, и поставьте "
                         "TRC20_WATCH_ONLY_ACK=true (приватные ключи на сервере хранить нельзя)")

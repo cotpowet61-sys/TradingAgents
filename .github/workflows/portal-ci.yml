@@ -6,11 +6,13 @@ on:
     paths:
       - "portal/**"
       - "backend/**"
+      - "research/**"
       - ".github/workflows/portal-ci.yml"
   pull_request:
     paths:
       - "portal/**"
       - "backend/**"
+      - "research/**"
   workflow_dispatch:
 
 jobs:
@@ -36,14 +38,26 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r portal/requirements-dev.txt
 
-      - name: Синтаксис и импорт портала
+      - name: "Синтаксис и импорт портала"
         run: |
           python -m compileall -q portal
           cd portal && python -c "import server; print('import ok')"
 
-      - name: Тесты (сеть не нужна: биржа за mock'ами)
+      - name: "Тесты портала (биржа за mock'ами, сеть не нужна)"
         working-directory: portal
+        env:
+          PYTHONPATH: ".:../backend:../research"
         run: python -m pytest tests -q
+
+      - name: "Тесты исследовательского контура (research/)"
+        env:
+          PYTHONPATH: "research:portal:backend"
+        run: python -m pytest research/tests -q
+
+      - name: "Сквозная самопроверка контура на синтетике"
+        env:
+          PYTHONPATH: "research:portal:backend"
+        run: python research/run.py selftest --bars 1200 --jobs 1 --strategies rsi_reversal,momentum_breakout
 
   security:
     name: security checks
@@ -62,14 +76,14 @@ jobs:
           python -m pip install -r portal/requirements-dev.txt
           python -m pip install pip-audit bandit
 
-      - name: Известные уязвимости в зависимостях (pip-audit)
+      - name: "Уязвимости в зависимостях (pip-audit)"
         # Падение только на реальных уязвимостях: отчёт без --strict-флага мусорный
-        run: pip-audit -r portal/requirements.txt --skip-editable || true
+        run: pip-audit -r portal/requirements.txt --skip-editable
 
-      - name: Статический анализ кода (bandit)
+      - name: "Статический анализ кода (bandit)"
         run: |
-          bandit -q -r portal -x portal/tests,portal/static \
-            -s B101,B311,B603,B607 \
+          bandit -q -r portal research -x portal/tests,research/tests,portal/static \
+            -s B101,B311,B603,B607,B615 \
             --severity-level medium --confidence-level medium
 
       - name: Секретов в репозитории быть не должно

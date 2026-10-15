@@ -53,7 +53,7 @@ def fresh_env(monkeypatch, *, saas: bool = True, auth_secret: str = "test-secret
             "portal_config", "db", "authn", "billing", "partners", "security", "council",
             "live_engine", "signal_learner", "signal_gates", "trades_analytics", "keyvault",
             "saas_routes", "server", "llm_client", "trade_context", "bybit_account", "backtest_local",
-            "signal_backtest", "tg_bot", "data", "strategies", "agents",
+            "signal_backtest", "tg_bot", "data", "strategies", "agents", "curated",
         }:
             del sys.modules[name]
     return tmp

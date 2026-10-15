@@ -11,13 +11,15 @@ Live-движок сигналов Портала: индикаторный ск
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import time
 from typing import Optional, Set
 
 from fastapi import WebSocket
 
-from portal_config import settings
+from portal_config import settings, DATA_DIR
 from council import get_market
 from strategies.registry import build_strategy
 from strategies.selector import get_selector
@@ -65,12 +67,57 @@ class LiveEngine:
         # Реестр активных сигналов: (symbol, tf) -> event. Сигнал «живёт»,
         # пока цена не дойдёт до TP/SL или не выйдет таймаут удержания.
         self.active: dict = {}
+        # Персистентность активных сигналов: без неё перезапуск сервиса «теряет»
+        # судьбу открытых сигналов — исходов нет, учиться не на чем, а в SD-логе
+        # остаются вечно активные записи. Пишем атомарно и не чаще раза в минуту.
+        self._active_dirty = False
+        self._active_saved_at = 0.0
         # метрики эксплуатации (видны в /api/live/state и /api/health)
         self.metrics: dict = {
             "scans": 0, "emitted": 0, "closed": 0, "skipped_no_data": 0,
             "skipped_low_conf": 0, "errors": 0, "last_error": "", "last_scan_ms": 0,
             "scan_duration_ms": 0, "data_source": "unknown", "_syn_warned": 0,
         }
+
+    # ------------------------------------------------------------------ #
+    # Персистентность активных сигналов
+    # ------------------------------------------------------------------ #
+    def _active_path(self) -> str:
+        return os.path.join(DATA_DIR, "live_active.json")
+
+    def _save_active(self, force: bool = False) -> None:
+        now = time.time()
+        if not force and (not self._active_dirty or now - self._active_saved_at < 60):
+            return
+        try:
+            items = {f"{k[0]}:{k[1]}": v for k, v in self.active.items()}
+            tmp = self._active_path() + ".tmp"
+            os.makedirs(DATA_DIR, exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"saved_at": now, "items": items}, f, ensure_ascii=False)
+            os.replace(tmp, self._active_path())
+            self._active_dirty = False
+            self._active_saved_at = now
+        except Exception as e:      # noqa: BLE001 — журнал не важнее торговли
+            log.warning("[portal-live] не удалось сохранить активные сигналы: %s", e)
+
+    def _load_active(self) -> int:
+        """Возвращает число восстановленных сигналов (0, если файла нет)."""
+        try:
+            with open(self._active_path(), "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return 0
+        n = 0
+        for key, sig in (data.get("items") or {}).items():
+            if ":" not in key or not isinstance(sig, dict):
+                continue
+            sym, tf = key.split(":", 1)
+            self.active[(sym, tf)] = sig
+            n += 1
+        if n:
+            log.info("[portal-live] восстановлено активных сигналов: %d", n)
+        return n
 
     def _fresh_dna(self):
         """ДНК трейдера с диска (перечитываем при обновлении файла)."""
@@ -116,6 +163,7 @@ class LiveEngine:
     def start(self):
         if not self.running:
             self.running = True
+            self._load_active()
             self._task = asyncio.create_task(self._loop())
 
     async def stop(self):
@@ -123,6 +171,7 @@ class LiveEngine:
         if self._task:
             self._task.cancel()
             self._task = None
+        self._save_active(force=True)      # graceful shutdown: ничего не теряем
 
     def _cadence_options(self) -> list[int]:
         """Лестница интервалов сканирования (сек). Пусто → фиксированный интервал.
@@ -152,6 +201,10 @@ class LiveEngine:
                 self.metrics["errors"] += 1
                 self.metrics["last_error"] = f"{type(e).__name__}: {str(e)[:200]}"
                 log.warning("[portal-live] ошибка сканирования: %s", e)
+            try:
+                self._save_active()
+            except Exception:      # noqa: BLE001
+                pass
             await asyncio.sleep(interval)
 
     def _fresh_my_strategy(self):
@@ -205,6 +258,14 @@ class LiveEngine:
                     del self.active[key]
                 continue
             px = (self.prices.get(sig.get("symbol") or "") or {}).get("last")
+            # Зависший сигнал (монета без цен, напр. делистинг или сбой фида):
+            # закрываем по таймауту с честной пометкой STALE — иначе запись живёт вечно.
+            if not px and now - (sig.get("ts") or 0) / 1000 > 2 * hold_sec:
+                sig["status"] = "CLOSED_STALE"
+                sig["closed_at"] = now
+                self._active_dirty = True
+                out.append(self._close_event(sig, "STALE", None))
+                continue
             reason, exit_px = None, None
             tp, sl, side = sig.get("tp"), sig.get("sl"), sig.get("side")
             # breakeven + трейлинг: подтягиваем стоп вслед за ценой (signal_gates)
@@ -231,7 +292,10 @@ class LiveEngine:
             if reason:
                 sig["status"] = "CLOSED_" + reason
                 sig["closed_at"] = now
+                self._active_dirty = True
                 out.append(self._close_event(sig, reason, exit_px))
+        if out:
+            self._save_active(force=True)
         return out
 
     def _gate(self, sym: str, tf: str, side: str, conf: float) -> tuple:
@@ -409,6 +473,48 @@ class LiveEngine:
                             return
                     except Exception:
                         pass
+                    # ИИ-фильтр сигналов: мета-модель, обученная research/ на истории
+                    # (волатильность, RSI, канал, объём, время, сторона, RR).
+                    # Пока USE_CURATED=false — блок пропускается целиком и портал
+                    # работает ровно как раньше; при CURATED_SHADOW=true считается,
+                    # но ничего не блокирует (сначала смотрим, потом доверяем).
+                    try:
+                        from curated import features_from_candles, gate as curated_gate
+                        feats = features_from_candles(
+                            candles, sig.side.value, float(sig.confidence or 0.0),
+                            planned_rr=(float(sig.tp_pct or 0.0) /
+                                        max(float(sig.sl_pct or 1.0), 1e-9)))
+                        keep, cinfo = curated_gate(settings, feats, stype=stype, symbol=sym,
+                                                   side=sig.side.value)
+                        if not keep:
+                            self.metrics["skipped_curated"] = \
+                                self.metrics.get("skipped_curated", 0) + 1
+                            return
+                        if cinfo.get("enabled") and cinfo.get("shadow") and cinfo.get("reason"):
+                            self.metrics["curated_shadow"] = \
+                                self.metrics.get("curated_shadow", 0) + 1
+                    except Exception as e:  # noqa: BLE001 — фильтр не должен ронять сканер
+                        log.debug("[portal-live] ИИ-фильтр недоступен: %s", e)
+                    # Разбор сделок с биржи (strategy_ranker): на этой паре часть
+                    # стратегий/сторон статистически убыточна — такие сигналы не берём,
+                    # а порог уверенности поднимаем до замеренного уровня.
+                    try:
+                        import strategy_ranker as R
+                        banned, allowed = R.blocked_for(sym, tf)
+                        combo = f"{stype}/{sig.side.value[0]}"
+                        ban_stypes = {b.split("/")[0] for b in banned}
+                        pair_rules = (R.pair_rules().get(f"{sym}:{tf}") or {})
+                        if combo in banned or (stype in ban_stypes and not allowed):
+                            self.metrics["skipped_ranker"] = self.metrics.get("skipped_ranker", 0) + 1
+                            return
+                        if allowed and combo not in allowed and int(pair_rules.get("trades") or 0) >= 20:
+                            self.metrics["skipped_ranker"] = self.metrics.get("skipped_ranker", 0) + 1
+                            return
+                        r_min = (R.load_report().get("rules") or {}).get("min_confidence")
+                        if r_min:
+                            min_conf = max(min_conf, float(r_min))
+                    except Exception as e:      # noqa: BLE001 — правила не должны ломать скан
+                        log.debug("[portal-live] ранкер недоступен для %s: %s", sym, e)
                     # персонализация под вашу историю (ДНК; 0 токенов)
                     fit = None
                     tp2, sl2, rr_free, risk_manual = sig.tp, sig.sl, False, False
@@ -488,6 +594,8 @@ class LiveEngine:
                     if learned:
                         event["learned"] = learned
                     self.active[(sym, tf)] = dict(event)
+                    self._active_dirty = True
+                    self._save_active(force=True)
                     self.feed.append(event)
                     self.feed = self.feed[-MAX_FEED:]
                     self.metrics["emitted"] += 1
@@ -518,6 +626,10 @@ class LiveEngine:
             "last_scan": self.last_scan,
             "feed_count": len(self.feed),
             "active_signals": len([1 for v in self.active.values() if v.get("status") == "ACTIVE"]),
+            # Источник данных важен для UI: на «учебном графике» сигналов нет,
+            # и пользователь должен видеть причину, а не пустую ленту.
+            "data_source": m.get("data_source", "unknown"),
+            "trading": bool(m.get("data_source") == "bybit") or not settings.REQUIRE_REAL_DATA,
             "metrics": m,
         }
 

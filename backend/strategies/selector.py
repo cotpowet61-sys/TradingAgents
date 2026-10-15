@@ -29,7 +29,26 @@ from data.market_data import MarketData
 from strategies.registry import build_strategy, STRATEGY_SCHEMAS
 from backtest.engine import run_backtest
 
-PROFILE_PATH = os.path.join(PROJECT_ROOT, "data", "strategy_profiles.json")
+def _profile_path() -> str:
+    """Куда писать профили стратегий.
+
+    Порядок: STRATEGY_PROFILE_PATH → PORTAL_DATA_DIR (боевой volume портала) →
+    backend/data (историческое поведение для старой платформы).
+
+    Зачем: портал раньше писал профили в backend/data, то есть в дерево исходников.
+    В контейнере это не volume — после редеплоя все профили (а значит и авто-выбор
+    стратегий) обнулялись. Теперь по умолчанию — в каталог данных портала.
+    """
+    explicit = os.environ.get("STRATEGY_PROFILE_PATH")
+    if explicit:
+        return explicit
+    portal_data = os.environ.get("PORTAL_DATA_DIR")
+    if portal_data:
+        return os.path.join(portal_data, "strategy_profiles.json")
+    return os.path.join(PROJECT_ROOT, "data", "strategy_profiles.json")
+
+
+PROFILE_PATH = _profile_path()
 
 
 class StrategySelector:

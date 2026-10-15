@@ -4,6 +4,12 @@
 #
 #   DOMAIN=tv.example.com bash portal/deploy/deploy.sh
 #
+# Ветку можно указать явно (рекомендуется, если в репозитории несколько веток):
+#   BRANCH=arena/526e0286-tradingagents DOMAIN=tv.example.com bash portal/deploy/deploy.sh
+# По умолчанию берётся ветка, помеченная в GitHub как основная (origin/HEAD).
+# ВАЖНО: основная ветка репозитория может НЕ содержать последних доработок —
+# тогда сначала смержите нужную ветку в основную на GitHub, либо задайте BRANCH.
+#
 # Что делает:
 #   1) системные пакеты, ufw (только 22/80/443), fail2ban, unattended-upgrades;
 #   2) отдельный системный пользователь без sudo;
@@ -20,12 +26,29 @@ set -euo pipefail
 
 APP=/srv/tradevision
 USER_NAME=tradevision
-BRANCH=${BRANCH:-main}
 DOMAIN=${DOMAIN:-}
 REPO=${REPO:-https://github.com/cotpowet61-sys/TradingAgents.git}
 BACKUP_DIR=/var/backups/tradevision
 
 [ "$(id -u)" = "0" ] || { echo "Запускать от root (sudo -i)."; exit 1; }
+
+# Ветка. По умолчанию — та, что помечена в репозитории как основная (origin/HEAD):
+# жёсткий "main" ломает деплой, если основная ветка называется иначе (в этом
+# репозитории основная ветка исторически — arena-ветка, а не main).
+# Можно переопределить осознанно:  BRANCH=main DOMAIN=... bash deploy.sh
+detect_branch() {
+    local b=""
+    b=$(git ls-remote --symref "$REPO" HEAD 2>/dev/null \
+        | awk '/^ref:/ {sub("refs/heads/", "", $2); print $2; exit}')
+    if [ -z "$b" ]; then
+        for cand in main master arena/01a09056-tradingagents; do
+            if git ls-remote --heads "$REPO" "$cand" 2>/dev/null | grep -q .; then b="$cand"; break; fi
+        done
+    fi
+    echo "${b:-main}"
+}
+BRANCH=${BRANCH:-$(detect_branch)}
+echo "== ветка деплоя: $BRANCH =="
 
 echo "== 1. системные пакеты =="
 export DEBIAN_FRONTEND=noninteractive

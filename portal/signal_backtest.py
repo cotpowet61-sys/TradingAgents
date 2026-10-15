@@ -36,6 +36,9 @@ WARMUP = 250            # прогрев индикаторов
 REPICK_EVERY = 6        # переподбор авто-стратегии каждые N баров
 DEFAULT_HOLD_MIN = 240  # таймаут сделки, если ручное время не задано (4 ч)
 MAX_BARS_TOTAL = 240_000  # защита от долгих прогонов
+# Сколько сделок отдавать в отчёте ПОШТУЧНО (для разбора правил ранкером).
+# Ограничение, чтобы ответ API не раздувался на длинных прогонах.
+MAX_TRADES_IN_REPORT = 3000
 
 
 class BacktestError(Exception):
@@ -220,7 +223,11 @@ async def run_signal_backtest(symbols: List[str], tfs: List[str], days: int,
                 rows = sim["trades"]
                 all_trades.extend(rows)
                 agg = _agg(rows)
-                agg.update({"symbol": sym, "tf": tf, "days": days_eff, "bars": sim["bars"]})
+                ss: Dict[str, List[dict]] = {}
+                for r in rows:
+                    ss.setdefault(f"{r.get('stype') or r.get('strategy')}/{str(r.get('side'))[0]}", []).append(r)
+                agg.update({"symbol": sym, "tf": tf, "days": days_eff, "bars": sim["bars"],
+                            "by_strategy_side": {k: _agg(v) for k, v in sorted(ss.items())}})
                 per_pair.append(agg)
             except BacktestError as e:
                 errors.append(str(e))
@@ -247,6 +254,11 @@ async def run_signal_backtest(symbols: List[str], tfs: List[str], days: int,
                                      if settings.SIGNAL_STRATEGY not in (None, "", "auto")
                                      else "auto-подбор")},
         "overall": _agg(all_trades),
+        "trades_all": [{k: r.get(k) for k in
+                        ("symbol", "tf", "side", "strategy", "stype", "reason", "pnl_pct",
+                         "duration_min", "conf", "entry", "exit", "mode", "ts")}
+                       for r in all_trades[:MAX_TRADES_IN_REPORT]],
+        "trades_all_total": len(all_trades),
         "per_pair": per_pair,
         "by_strategy": strategies,
         "recent_trades": [{k: r[k] for k in

@@ -69,6 +69,12 @@ security.install(app, settings)
 async def _startup():
     ensure_env_file()
     os.makedirs(DATA_DIR, exist_ok=True)
+    try:
+        from portal_config import ensure_secrets
+        for _m in ensure_secrets(settings):   # первичная генерация секретов (один раз)
+            print(f"[portal] {_m}")
+    except Exception as _e:            # noqa: BLE001 — не блокируем старт из-за .env
+        print(f"[portal] не удалось подготовить секреты: {_e}")
     enforce_startup(settings)          # боевая конфигурация проверяется до приёма трафика
     if settings.LIVE_SCANNER:
         get_engine().start()
@@ -467,8 +473,24 @@ class ConfigUpdate(BaseModel):
 
 
 @app.post("/api/config")
-async def update_config(body: ConfigUpdate):
-    applied = settings.apply_update(body.updates or {})
+async def update_config(request: Request, body: ConfigUpdate):
+    """Изменение настроек портала. Пишем в аудит ЧТО меняли, но БЕЗ значений.
+
+    Ключи AI и Telegram-токен тут тоже меняются, поэтому в журнал попадают
+    только имена полей и отпечаток факта изменения — никаких секретов в аудите.
+    """
+    updates = body.updates or {}
+    sensitive = {k for k in updates if any(t in k for t in
+                                           ("key", "secret", "token", "wallet", "password"))}
+    applied = settings.apply_update(updates)
+    try:
+        security.audit("config_update",
+                       actor=str(request.headers.get("x-forwarded-for") or "")[:120],
+                       ip=security.client_ip(request, settings.TRUST_PROXY_HEADERS),
+                       detail=("fields=" + ",".join(sorted(applied.keys())[:40]) +
+                               (" | sensitive_changed=" + ",".join(sorted(sensitive)) if sensitive else "")))
+    except Exception:
+        pass
     return {"applied": list(applied.keys()), "config": settings.public_config()}
 
 
@@ -530,6 +552,13 @@ async def metrics(request: Request):
             db_stats[key] = (_db.q(sql, params, one=True) or {}).get("n", 0)
     except Exception:
         pass
+    curated_stats = {}
+    try:
+        import curated as _cur
+        curated_stats = {**_cur.stats(), "enabled": _cur.enabled(settings),
+                         "shadow": bool(getattr(settings, "CURATED_SHADOW", True))}
+    except Exception:
+        curated_stats = {}
     return {
         "ok": True,
         "version": app.version,
@@ -537,6 +566,7 @@ async def metrics(request: Request):
         "market": market,
         "live": get_engine().state(),
         "db": db_stats,
+        "curated": curated_stats,
         "ts": int(time.time() * 1000),
     }
 
@@ -649,6 +679,124 @@ async def signals_backtest(payload: dict = Body(default={})):
                                  f"уменьшите число монет/таймфреймов или период")
     except BacktestError as e:
         raise HTTPException(400, str(e))
+
+
+# ---------------------------------------------------------------------- #
+# Разбор сделок с биржи и подбор стратегий/целей (strategy_ranker)
+# ---------------------------------------------------------------------- #
+def _admin_ok(request: Request) -> bool:
+    """Админ-доступ: x-admin-token (constant-time), либо владелец в SaaS."""
+    tok = request.headers.get("x-admin-token", "") or ""
+    if tok and security.safe_eq(tok, str(settings.ADMIN_TOKEN or "")):
+        return True
+    if settings.SAAS_MODE:
+        try:
+            import authn as _a
+            u = _a.user_by_token(request.cookies.get(_a.COOKIE))
+            return bool(u and _a.is_owner(u))
+        except Exception:
+            return False
+    return False
+
+
+@app.get("/api/admin/ranker")
+async def ranker_summary(request: Request):
+    """Что известно по сделкам: какие стратегии/стороны работают, какой TP/SL подобран."""
+    if not _admin_ok(request):
+        raise HTTPException(403, "forbidden")
+    try:
+        import strategy_ranker as R
+        return {"ok": True, "summary": R.summary_for_ui(),
+                "tp_floor_pct": R.tp_floor_pct(), "cost_pct": round(R.round_trip_cost_pct(), 4)}
+    except Exception as e:      # noqa: BLE001
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+@app.post("/api/admin/ranker/analyze")
+async def ranker_analyze(request: Request, payload: dict = Body(default={})):
+    """Прогон стратегий по реальным свечам Bybit + построение правил.
+
+    Медленная операция (ходит на биржу), поэтому: admin-токен, лимит по частоте,
+    ограничение объёма и таймаут — как у обычного бэктеста.
+    """
+    if not _admin_ok(request):
+        raise HTTPException(403, "forbidden")
+    ip = security.client_ip(request, settings.TRUST_PROXY_HEADERS)
+    ok, retry = security.rate_ok(f"ranker:{ip}", limit=6, window_s=600)
+    if not ok:
+        raise HTTPException(429, f"слишком часто, повторите через {retry} с")
+    import strategy_ranker as R
+    from signal_backtest import run_signal_backtest
+    symbols = payload.get("symbols") or settings.watchlist
+    if isinstance(symbols, str):
+        symbols = [s.strip() for s in symbols.split(",") if s.strip()]
+    tfs = payload.get("tfs") or settings.signal_timeframes
+    if isinstance(tfs, str):
+        tfs = [t.strip() for t in tfs.split(",") if t.strip()]
+    days = max(1, min(int(payload.get("days") or 30), int(settings.BACKTEST_MAX_DAYS)))
+    symbols = [s.upper() for s in symbols][: int(settings.BACKTEST_MAX_SYMBOLS)]
+    tfs = tfs[: int(settings.BACKTEST_MAX_TFS)]
+    try:
+        rep = await asyncio.wait_for(run_signal_backtest(symbols, tfs, days),
+                                     timeout=float(settings.BACKTEST_TIMEOUT_SEC))
+    except asyncio.TimeoutError:
+        raise HTTPException(504, "прогон не уложился в лимит времени — уменьшите объём")
+    rules = R.analyze(rep)
+    payload_out = {"generated_at": int(time.time()),
+                   "params": {"symbols": symbols, "tfs": tfs, "days": days},
+                   "overall": rep.get("overall"), "rules": rules,
+                   "errors": (rep.get("errors") or [])[:5]}
+    path = R.save_report(payload_out)
+    try:
+        security.audit("ranker_analyze", extra={"symbols": symbols, "tfs": tfs, "days": days})
+    except Exception:
+        pass
+    return {"ok": True, "saved": os.path.basename(path), "summary": R.summary_for_ui()}
+
+
+@app.post("/api/admin/ranker/optimize")
+async def ranker_optimize(request: Request, payload: dict = Body(default={})):
+    """Перебор TP/SL на реальных свечах: ищем цель/стоп по экономике, не по красоте."""
+    if not _admin_ok(request):
+        raise HTTPException(403, "forbidden")
+    ip = security.client_ip(request, settings.TRUST_PROXY_HEADERS)
+    ok, retry = security.rate_ok(f"ranker_opt:{ip}", limit=2, window_s=1800)
+    if not ok:
+        raise HTTPException(429, f"подбор уже запускался; следующий через {retry} с")
+    import strategy_ranker as R
+    symbols = payload.get("symbols") or settings.watchlist
+    if isinstance(symbols, str):
+        symbols = [s.strip() for s in symbols.split(",") if s.strip()]
+    tf = str(payload.get("tf") or settings.DEFAULT_TIMEFRAME)
+    days = max(1, min(int(payload.get("days") or 30), int(settings.BACKTEST_MAX_DAYS)))
+    target = float(payload.get("winrate_target") or 75.0)
+    res = await R.optimize_targets([s.upper() for s in symbols], tf, days,
+                                   winrate_target=target,
+                                   max_symbols=int(settings.BACKTEST_MAX_SYMBOLS))
+    prev = R.load_report()
+    prev["optimize"] = res
+    R.save_report(prev)
+    try:
+        security.audit("ranker_optimize", extra={"tf": tf, "days": days,
+                                                 "best": (res.get("best") or {}).get("tp_pct")})
+    except Exception:
+        pass
+    return {"ok": "error" not in res, "result": res, "summary": R.summary_for_ui()}
+
+
+@app.post("/api/admin/ranker/apply")
+async def ranker_apply(request: Request, payload: dict = Body(default={})):
+    """Записать подобранные TP/SL и стоп-лист в portal/.env (действие оператора)."""
+    if not _admin_ok(request):
+        raise HTTPException(403, "forbidden")
+    import strategy_ranker as R
+    rep = R.load_report()
+    best = ((rep.get("optimize") or {}).get("best")) or {}
+    rules = rep.get("rules") or {}
+    target = {**(best or {}), "min_confidence": payload.get("min_confidence") or rules.get("min_confidence"),
+              "blocked_sides": payload.get("blocked_sides") or rules.get("blocked_sides")}
+    res = R.apply_to_env(target, approved_by=str(payload.get("by") or "admin-ui"))
+    return {"ok": True, **res}
 
 
 @app.websocket("/ws")

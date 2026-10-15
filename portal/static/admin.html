@@ -40,6 +40,23 @@ code{background:#0a0d0c;padding:2px 8px;border-radius:6px;color:var(--acc)}
   </div>
 
   <div class="card">
+    <h1 style="font-size:15px">Разбор сделок с биржи → подбор стратегий и целей</h1>
+    <span class="mut">Прогоняет ВСЕ стратегии по реальным свечам Bybit, считает винрейт с нижней
+    границей, ожидание на сделку и профит-фактор. Затем подбирает TP/SL по экономике
+    (пол по TP — чтобы цель не была микроскопической) и предлагает стоп-лист стратегий/сторон.
+    Применение — только по этой кнопке: настройки уйдут в <code>portal/.env</code> и в журнал аудита.</span>
+    <div style="margin-top:12px">
+      <input id="rSym" placeholder="монеты через запятую (пусто = watchlist)" style="width:320px">
+      <input id="rTf" placeholder="ТФ" value="15m" style="width:80px">
+      <input id="rDays" type="number" value="30" style="width:90px"> дн.
+      <button class="btn" onclick="rAnalyze()">Разобрать сделки</button>
+      <button class="btn" onclick="rOptimize()">Подобрать TP/SL</button>
+      <button class="btn" onclick="rApply()">Применить в .env</button>
+    </div>
+    <span id="rMsg" class="mut" style="display:inline-block;margin-top:8px"></span>
+    <div id="rOut" class="mut" style="margin-top:10px"></div>
+  </div>
+  <div class="card">
     <h1 style="font-size:15px">Партнёры</h1>
     <table id="tbl"></table>
   </div>
@@ -76,7 +93,54 @@ async function pay(c){
   const r=await fetch('/api/admin/partner/pay',{method:'POST',headers:H(),body:JSON.stringify({code:c,tx_ref:tx})});
   load();
 }
-if($('tok').value)load();
+
+// ---- Разбор сделок с биржи (strategy_ranker) -------------------------- //
+function rParams(){
+  return {symbols:$('rSym').value.trim(), tfs:$('rTf').value.trim()||'15m',
+          days:+$('rDays').value||30};
+}
+async function rLoad(){
+  const r=await fetch('/api/admin/ranker',{headers:H()});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){$('rOut').innerHTML='<span class="mut">403 — проверьте токен</span>';return;}
+  const s=d.summary||{};
+  const pairs=Object.entries(s.pairs||{}).slice(0,6)
+    .map(([k,v])=>`<div><b>${k}</b> · сделок ${v.trades} · WR ${v.winrate??'—'}% · ожид ${v.avg??'—'}%<br>
+      <span class="mut">разрешено: ${(v.allowed||[]).join(', ')||'—'}<br>запрещено: ${(v.blocked||[]).join(', ')||'—'}</span></div>`).join('');
+  const opt=s.optimize&&s.optimize.best?`<div style="margin-top:8px"><b>Подобранные цели:</b> TP ${s.optimize.best.tp_pct}% / SL ${s.optimize.best.sl_pct}%
+      · n=${s.optimize.best.n} · WR ${s.optimize.best.winrate}% · ожид ${s.optimize.best.avg}%
+      ${s.optimize.winrate_target_met?'<span class="pill">цель по винрейту достигнута</span>':'<span class="pill" style="background:rgba(255,209,102,.14);color:#ffd166">цель по винрейту не достигнута</span>'}
+      <div class="mut">${(s.optimize.notes||[]).join('<br>')}</div></div>`:'';
+  $('rOut').innerHTML=`<div>пол по TP: <b>${d.tp_floor_pct}%</b> · издержки: ${d.cost_pct}% на сделку
+      · порог уверенности: <b>${s.min_confidence??'—'}</b></div>
+    <div>запрещённые стратегии/стороны: ${(s.blocked_sides||[]).join(', ')||'—'}</div>
+    <div class="mut">отчёт от: ${s.generated_at?new Date(s.generated_at*1000).toLocaleString():'—'}</div>
+    ${pairs}${opt}`;
+}
+async function rAnalyze(){
+  $('rMsg').textContent='прогоняю стратегии по бирже (может занять до пары минут)...';
+  const r=await fetch('/api/admin/ranker/analyze',{method:'POST',headers:H(),body:JSON.stringify(rParams())});
+  const d=await r.json().catch(()=>({}));
+  $('rMsg').textContent=r.ok?'готово: '+d.saved:`ошибка: ${d.detail||''}`;
+  if(r.ok)rLoad();
+}
+async function rOptimize(){
+  $('rMsg').textContent='перебираю TP/SL на реальных свечах (несколько минут)...';
+  const p=rParams();
+  const r=await fetch('/api/admin/ranker/optimize',{method:'POST',headers:H(),
+    body:JSON.stringify({symbols:p.symbols,tf:(p.tfs||'15m').split(',')[0],days:p.days})});
+  const d=await r.json().catch(()=>({}));
+  $('rMsg').textContent=r.ok?'подбор завершён':`ошибка: ${d.detail||''}`;
+  rLoad();
+}
+async function rApply(){
+  if(!confirm('Записать подобранные TP/SL и стоп-лист в portal/.env?'))return;
+  const r=await fetch('/api/admin/ranker/apply',{method:'POST',headers:H(),body:JSON.stringify({})});
+  const d=await r.json().catch(()=>({}));
+  $('rMsg').innerHTML=r.ok?('применено: <code>'+Object.entries(d.applied||{}).map(([k,v])=>k+'='+v).join(', ')+'</code>'):`ошибка: ${d.detail||''}`;
+  rLoad();
+}
+if($('tok').value){load();rLoad();}
 </script>
 </body>
 </html>
